@@ -25,14 +25,14 @@ Widget _bg({required Widget child}) => Container(
 
 Widget _card({required Widget child}) => Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
           color: const Color(0x33FFFFFF),
           borderRadius: BorderRadius.circular(16)),
       child: child,
     );
 
-const TextStyle _label = TextStyle(color: Colors.white, fontSize: 16);
+const TextStyle _label = TextStyle(color: Colors.white, fontSize: 14);
 
 /// لوحة خيارات المباراة (تُستخدم في الفردي والاستضافة).
 Widget optionsPanel(
@@ -140,9 +140,9 @@ class _SoloSetupScreenState extends State<SoloSetupScreen> {
       body: _bg(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 50, 20, 20),
+            padding: const EdgeInsets.fromLTRB(14, 46, 14, 14),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 460),
+              constraints: const BoxConstraints(maxWidth: 400),
               child: Column(
                 children: [
                   optionsPanel(_o,
@@ -155,10 +155,10 @@ class _SoloSetupScreenState extends State<SoloSetupScreen> {
                     width: double.infinity,
                     child: FilledButton(
                       style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 14)),
+                          padding: const EdgeInsets.symmetric(vertical: 10)),
                       onPressed: _start,
                       child: const Text('ابدأ المباراة',
-                          style: TextStyle(fontSize: 18)),
+                          style: TextStyle(fontSize: 15)),
                     ),
                   ),
                 ],
@@ -271,9 +271,9 @@ class _HostLobbyScreenState extends State<HostLobbyScreen> {
       body: _bg(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 50, 20, 20),
+            padding: const EdgeInsets.fromLTRB(14, 46, 14, 14),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 460),
+              constraints: const BoxConstraints(maxWidth: 400),
               child: Column(
                 children: [
                   if (_error != null)
@@ -323,13 +323,13 @@ class _HostLobbyScreenState extends State<HostLobbyScreen> {
                       width: double.infinity,
                       child: FilledButton(
                         style: FilledButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14)),
+                            padding: const EdgeInsets.symmetric(vertical: 10)),
                         onPressed: peers.isEmpty ? null : _start,
                         child: Text(
                             peers.isEmpty
                                 ? 'بانتظار انضمام لاعبين...'
                                 : 'ابدأ المباراة',
-                            style: const TextStyle(fontSize: 18)),
+                            style: const TextStyle(fontSize: 15)),
                       ),
                     ),
                   ],
@@ -455,9 +455,9 @@ class _JoinScreenState extends State<JoinScreen> {
       body: _bg(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 50, 20, 20),
+            padding: const EdgeInsets.fromLTRB(14, 46, 14, 14),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 460),
+              constraints: const BoxConstraints(maxWidth: 400),
               child: _error != null
                   ? _card(
                       child: Column(

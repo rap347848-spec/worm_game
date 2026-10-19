@@ -32,6 +32,23 @@ class WorldPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    final sc = canvas.getSaveCount();
+    try {
+      _paintWorld(canvas, size);
+    } catch (e) {
+      canvas.restoreToCount(sc);
+      canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF0B1F2A));
+      final tp = TextPainter(
+        text: TextSpan(
+            text: 'خطأ في الرسم:\n$e',
+            style: const TextStyle(color: Color(0xFFFFFFFF), fontSize: 13)),
+        textDirection: TextDirection.rtl,
+      )..layout(maxWidth: size.width - 24);
+      tp.paint(canvas, const Offset(12, 12));
+    }
+  }
+
+  void _paintWorld(Canvas canvas, Size size) {
     final lowFx = Store.i.settings.batterySaver;
     final scale = size.height / Cfg.viewHeight;
     final viewW = size.width / scale;
@@ -259,10 +276,6 @@ class WorldPainter extends CustomPainter {
       path.lineTo(w.trail[i].dx, w.trail[i].dy);
     }
 
-    if (ghost) {
-      canvas.saveLayer(null, Paint()..color = const Color(0x99FFFFFF));
-    }
-
     // التوهج حول الدودة: لون وقوة حسب المستوى
     final pulse = 0.75 + 0.25 * math.sin(engine.time * 3 + w.id);
     final gw = width + 0.9 + tier * 0.22;
@@ -270,16 +283,15 @@ class WorldPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
-    if (lowFx) {
+    if (!lowFx) {
       glow
-        ..strokeWidth = gw
-        ..color = gc.withAlpha(110);
-    } else {
-      glow
-        ..strokeWidth = gw + 0.6
-        ..color = gc.withAlpha((170 * pulse).round())
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 0.45 + tier * 0.1);
+        ..strokeWidth = gw + 1.2
+        ..color = gc.withAlpha((70 * pulse).round());
+      canvas.drawPath(path, glow);
     }
+    glow
+      ..strokeWidth = gw
+      ..color = gc.withAlpha(lowFx ? 110 : (130 * pulse).round());
     canvas.drawPath(path, glow);
 
     final hsl = HSLColor.fromColor(w.color);
@@ -346,7 +358,6 @@ class WorldPainter extends CustomPainter {
           Paint()..color = const Color(0xFF000000));
     }
 
-    if (ghost) canvas.restore();
 
     // حلقات القدرات
     if (ghost) {

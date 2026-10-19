@@ -45,7 +45,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(16, 50, 16, 20),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 480),
+                constraints: const BoxConstraints(maxWidth: 420),
                 child: Container(
                   decoration: BoxDecoration(
                       color: const Color(0x33FFFFFF),

@@ -95,13 +95,13 @@ class _MenuScreenState extends State<MenuScreen> {
           child: Text(
             '• المس أي مكان بالشاشة وحرّك إصبعك: الدودة تتجه حسب حركة إصبعك.\n'
             '• ضغطتان سريعتان: تسريع ${Cfg.boostDuration.round()} ثوانٍ، ثم انتظار ${Cfg.boostCooldown.round()} ثوانٍ.\n'
-            '• كُل الفواكه لتكبر. الفاكهة الذهبية تعطي نمواً أكبر.\n'
+            '• كُل الفواكه لتطول دودتك. الفاكهة الذهبية تعطي نمواً أكبر.\n'
             '• القدرات: 🛡️ درع يحميك من موت واحد، 🧲 مغناطيس يجذب الفواكه، ❄️ تجميد يبطّئ من حولك.\n'
             '• إذا لمس رأسك الجدار أو جسم دودة أخرى تموت وتتحول إلى فواكه.\n'
-            '• تفوز بقتل ${10} دودات، وتخرج بعد ${10} موتات.\n'
+            '• تفوز بقتل 10 دودات، وتخرج بعد 10 موتات.\n'
             '• اسحب الخريطة المصغرة ولوحة الترتيب لأي مكان.\n'
             '• كل فوز يرفع مستواك: 100 مستوى وألقاب وألوان توهج تتغير كل 10 مستويات.',
-            style: const TextStyle(height: 1.6),
+            style: const TextStyle(height: 1.5),
           ),
         ),
         actions: [
@@ -119,28 +119,79 @@ class _MenuScreenState extends State<MenuScreen> {
   void _multi() {
     showModalBottomSheet(
       context: context,
+      constraints: const BoxConstraints(maxWidth: 420),
       builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.wifi_tethering),
+                title: const Text('استضافة غرفة'),
+                subtitle: const Text('افتح غرفة ليدخلها أصدقاؤك'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _go(const HostLobbyScreen());
+                },
+              ),
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.search),
+                title: const Text('الانضمام لغرفة'),
+                subtitle: const Text('ابحث عن غرفة قريبة منك'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _go(const JoinScreen());
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _btn(String text, IconData icon, VoidCallback f, {bool main = false}) {
+    final label = Text(text, style: const TextStyle(fontSize: 14));
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: SizedBox(
+        width: double.infinity,
+        height: 40,
+        child: main
+            ? FilledButton.icon(onPressed: f, icon: Icon(icon, size: 18), label: label)
+            : OutlinedButton.icon(onPressed: f, icon: Icon(icon, size: 18), label: label),
+      ),
+    );
+  }
+
+  Widget _profileCard() {
+    final p = Store.i.profile;
+    final lv = p.level;
+    final tier = tierOf(lv);
+    final gc = kGlowColors[tier];
+    return GestureDetector(
+      onTap: () => _go(const ProfileScreen()),
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0x33FFFFFF),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: gc, width: 2),
+          boxShadow: [BoxShadow(color: gc.withAlpha(110), blurRadius: 10)],
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(
-              leading: const Icon(Icons.wifi_tethering),
-              title: const Text('استضافة غرفة'),
-              subtitle: const Text('افتح غرفة ليدخلها أصدقاؤك (بلوتوث / واي فاي)'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _go(const HostLobbyScreen());
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.search),
-              title: const Text('الانضمام لغرفة'),
-              subtitle: const Text('ابحث عن غرفة قريبة منك'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _go(const JoinScreen());
-              },
-            ),
+            Text(p.name.isEmpty ? '...' : p.name,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
+            Text('${kTitles[tier]} · المستوى $lv · ${p.wins} فوز',
+                style: TextStyle(color: gc, fontSize: 12, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            LinearProgressIndicator(
+                value: levelProgress(p.points), minHeight: 5, color: gc),
           ],
         ),
       ),
@@ -149,30 +200,41 @@ class _MenuScreenState extends State<MenuScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final p = Store.i.profile;
-    final lv = p.level;
-    final tier = tierOf(lv);
-    final gc = kGlowColors[tier];
+    final left = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('🐍 لعبة الدودة',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+                color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 10),
+        _profileCard(),
+        const SizedBox(height: 10),
+        const Text(Cfg.credit,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+                color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+        const Text(Cfg.phone,
+            textAlign: TextAlign.center,
+            textDirection: TextDirection.ltr,
+            style: TextStyle(color: Colors.white54, fontSize: 12)),
+      ],
+    );
 
-    Widget btn(String text, IconData icon, VoidCallback f, {bool main = false}) =>
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: main
-              ? FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14)),
-                  onPressed: f,
-                  icon: Icon(icon),
-                  label: Text(text, style: const TextStyle(fontSize: 18)),
-                )
-              : OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12)),
-                  onPressed: f,
-                  icon: Icon(icon),
-                  label: Text(text),
-                ),
-        );
+    final right = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _btn('لعب فردي ضد البوتات', Icons.person, () => _go(const SoloSetupScreen()),
+            main: true),
+        _btn('لعب جماعي (بلوتوث / واي فاي)', Icons.groups, _multi, main: true),
+        _btn('الملف الشخصي والإنجازات', Icons.emoji_events,
+            () => _go(const ProfileScreen())),
+        _btn('الإعدادات', Icons.settings, () => _go(const SettingsScreen())),
+        _btn('كيف تلعب؟', Icons.help_outline, _howTo),
+      ],
+    );
 
     return Scaffold(
       body: Container(
@@ -186,75 +248,25 @@ class _MenuScreenState extends State<MenuScreen> {
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(12),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Text('🐍 لعبة الدودة',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 30,
-                            fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 14),
-                    GestureDetector(
-                      onTap: () => _go(const ProfileScreen()),
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0x33FFFFFF),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: gc, width: 2),
-                          boxShadow: [
-                            BoxShadow(color: gc.withAlpha(120), blurRadius: 12)
-                          ],
-                        ),
-                        child: Column(
-                          children: [
-                            Text(p.name.isEmpty ? '...' : p.name,
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold)),
-                            Text('${kTitles[tier]} · المستوى $lv · ${p.wins} فوز',
-                                style: TextStyle(
-                                    color: gc, fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 8),
-                            LinearProgressIndicator(
-                                value: levelProgress(p.points),
-                                minHeight: 6,
-                                color: gc),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    btn('لعب فردي ضد البوتات', Icons.person,
-                        () => _go(const SoloSetupScreen()),
-                        main: true),
-                    btn('لعب جماعي (بلوتوث / واي فاي)', Icons.groups, _multi,
-                        main: true),
-                    btn('الملف الشخصي والإنجازات', Icons.emoji_events,
-                        () => _go(const ProfileScreen())),
-                    btn('الإعدادات', Icons.settings,
-                        () => _go(const SettingsScreen())),
-                    btn('كيف تلعب؟', Icons.help_outline, _howTo),
-                    const SizedBox(height: 10),
-                    const Text(Cfg.credit,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold)),
-                    const Text(Cfg.phone,
-                        textAlign: TextAlign.center,
-                        textDirection: TextDirection.ltr,
-                        style: TextStyle(color: Colors.white54, fontSize: 13)),
-                  ],
-                ),
+                constraints: const BoxConstraints(maxWidth: 640),
+                child: LayoutBuilder(builder: (context, box) {
+                  if (box.maxWidth >= 480) {
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(flex: 5, child: left),
+                        const SizedBox(width: 16),
+                        Expanded(flex: 6, child: right),
+                      ],
+                    );
+                  }
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [left, const SizedBox(height: 12), right],
+                  );
+                }),
               ),
             ),
           ),

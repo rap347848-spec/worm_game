@@ -29,6 +29,7 @@ class _GameScreenState extends State<GameScreen>
   bool _paused = false;
   bool _chatOpen = false;
   bool _lost = false;
+  String? _err;
 
   Offset? _mapPos;
   Offset? _boardPos;
@@ -102,8 +103,12 @@ class _GameScreenState extends State<GameScreen>
     final dt =
         ((elapsed - _last).inMicroseconds / 1000000.0).clamp(0.0, 0.05).toDouble();
     _last = elapsed;
-    if (!_paused) _engine.update(dt);
-    if (_engine.over && _recordedRound != _engine.round) _finish();
+    try {
+      if (!_paused) _engine.update(dt);
+      if (_engine.over && _recordedRound != _engine.round) _finish();
+    } catch (e) {
+      if (_err == null && mounted) setState(() => _err = '$e');
+    }
   }
 
   // ---------------- الأصوات والاهتزاز ----------------
@@ -223,7 +228,10 @@ class _GameScreenState extends State<GameScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    final mq = MediaQuery.of(context);
+    return MediaQuery(
+      data: mq.copyWith(textScaler: TextScaler.noScaling),
+      child: Scaffold(
       backgroundColor: Colors.black,
       body: LayoutBuilder(builder: (context, box) {
         final size = box.biggest;
@@ -365,10 +373,24 @@ class _GameScreenState extends State<GameScreen>
 
             if (_paused && !_engine.over) _pauseOverlay(size),
             if (_lost) _lostOverlay(size),
+            if (_err != null)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: Container(
+                    color: const Color(0xDD000000),
+                    padding: const EdgeInsets.all(8),
+                    child: Text('خطأ: $_err',
+                        style: const TextStyle(color: Colors.orangeAccent, fontSize: 12)),
+                  ),
+                ),
+              ),
           ],
         );
       }),
-    );
+    ));
   }
 
   Offset _clampPos(Offset p, Size size, double w, double h) {
@@ -473,7 +495,7 @@ class _GameScreenState extends State<GameScreen>
         color: const Color(0xAA000000),
         alignment: Alignment.center,
         child: Container(
-          width: 360,
+          width: 320,
           constraints: BoxConstraints(maxHeight: size.height * 0.92),
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
