@@ -1,7 +1,7 @@
 name: worm_game
 description: لعبة الدودة - لعبة متعددة اللاعبين
 publish_to: 'none'
-version: 0.1.0+1
+version: 1.0.0+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -9,6 +9,13 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  shared_preferences: ^2.2.2
+  audioplayers: ^6.0.0
+  nearby_connections: ^4.0.0
+  permission_handler: ^11.3.0
+  crypto: ^3.0.3
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/sfx/
