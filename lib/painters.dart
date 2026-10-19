@@ -3,13 +3,36 @@ import 'package:flutter/material.dart';
 import 'config.dart';
 import 'engine.dart';
 import 'models.dart';
+import 'progress.dart';
+
+Color glowColorFor(int tier, double time) {
+  if (tier >= 9) {
+    return HSVColor.fromAHSV(1, (time * 90) % 360, 0.75, 1).toColor();
+  }
+  return kGlowColors[tier];
+}
 
 class WorldPainter extends CustomPainter {
   final GameEngine engine;
   WorldPainter(this.engine) : super(repaint: engine);
 
+  static final Map<String, TextPainter> _tp = {};
+
+  TextPainter _text(String s, double size, Color color) {
+    final key = '$s|$size|${color.hashCode}';
+    return _tp.putIfAbsent(
+        key,
+        () => TextPainter(
+              text: TextSpan(
+                  text: s, style: TextStyle(fontSize: size, color: color)),
+              textDirection: TextDirection.rtl,
+              textAlign: TextAlign.center,
+            )..layout());
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
+    final lowFx = Store.i.settings.batterySaver;
     final scale = size.height / Cfg.viewHeight;
     final viewW = size.width / scale;
     const viewH = Cfg.viewHeight;
@@ -35,25 +58,28 @@ class WorldPainter extends CustomPainter {
     canvas.drawRect(const Rect.fromLTWH(0, 0, Cfg.arena, Cfg.arena),
         Paint()..color = const Color(0xFFB3E5FC));
 
-    // شبكة خفيفة
-    final grid = Paint()
-      ..color = const Color(0x3390A4AE)
-      ..strokeWidth = 0.12;
-    final top = math.max(0.0, view.top);
-    final bottom = math.min(Cfg.arena, view.bottom);
-    final left = math.max(0.0, view.left);
-    final right = math.min(Cfg.arena, view.right);
-    for (double x = (left / 10).floor() * 10.0; x <= right; x += 10) {
-      canvas.drawLine(Offset(x, top), Offset(x, bottom), grid);
-    }
-    for (double y = (top / 10).floor() * 10.0; y <= bottom; y += 10) {
-      canvas.drawLine(Offset(left, y), Offset(right, y), grid);
+    // شبكة خفيفة (تُلغى في وضع توفير البطارية)
+    if (!lowFx) {
+      final grid = Paint()
+        ..color = const Color(0x3390A4AE)
+        ..strokeWidth = 0.12;
+      final top = math.max(0.0, view.top);
+      final bottom = math.min(Cfg.arena, view.bottom);
+      final left = math.max(0.0, view.left);
+      final right = math.min(Cfg.arena, view.right);
+      for (double x = (left / 10).floor() * 10.0; x <= right; x += 10) {
+        canvas.drawLine(Offset(x, top), Offset(x, bottom), grid);
+      }
+      for (double y = (top / 10).floor() * 10.0; y <= bottom; y += 10) {
+        canvas.drawLine(Offset(left, y), Offset(right, y), grid);
+      }
     }
 
     // الجدار: يتوهج بالأحمر عند اقتراب اللاعب منه
     double warn = 0;
-    if (engine.player.alive) {
-      final h = engine.player.head;
+    final pl = engine.player;
+    if (pl.alive) {
+      final h = pl.head;
       final dmin = math.min(
           math.min(h.dx, h.dy), math.min(Cfg.arena - h.dx, Cfg.arena - h.dy));
       warn = math.max(0.0, math.min(1.0, (10 - dmin) / 10));
@@ -75,18 +101,22 @@ class WorldPainter extends CustomPainter {
           ..color = Color.lerp(
               const Color(0xFF455A64), const Color(0xFFFF1744), warn)!);
 
-    // الفواكه
+    // الفواكه والقدرات
     final fv = view.inflate(3);
     for (final f in engine.fruits) {
       if (!fv.contains(f.pos)) continue;
       _drawFruit(canvas, f);
     }
+    for (final p in engine.powerUps) {
+      if (!fv.contains(p.pos)) continue;
+      _drawPower(canvas, p);
+    }
 
     // الدودات: الخصوم أولاً ثم اللاعب فوقهم
     for (final w in engine.worms) {
-      if (w.alive && !w.isPlayer) _drawWorm(canvas, w);
+      if (w.alive && !w.isPlayer) _drawWorm(canvas, w, lowFx);
     }
-    if (engine.player.alive) _drawWorm(canvas, engine.player);
+    if (pl.alive) _drawWorm(canvas, pl, lowFx);
 
     canvas.restore();
   }
@@ -171,6 +201,19 @@ class WorldPainter extends CustomPainter {
                 height: r * 0.35),
             leaf);
         break;
+      case 5: // فاكهة ذهبية نادرة
+        final pulse = 0.8 + 0.2 * math.sin(engine.time * 5);
+        c.drawCircle(p, r * 2.1 * pulse,
+            Paint()..color = const Color(0x55FFD700));
+        c.drawCircle(p, r * 1.25, Paint()..color = const Color(0xFFFFC107));
+        c.drawCircle(p, r * 1.25,
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = r * 0.2
+              ..color = const Color(0xFFFFF176));
+        c.drawPath(_star(p, r * 0.8, r * 0.35),
+            Paint()..color = const Color(0xFFFFFDE7));
+        break;
       default: // برتقال
         c.drawCircle(p, r, Paint()..color = const Color(0xFFFB8C00));
         c.drawCircle(p + const Offset(-r * 0.3, -r * 0.3), r * 0.28,
@@ -186,22 +229,61 @@ class WorldPainter extends CustomPainter {
     }
   }
 
+  void _drawPower(Canvas c, PowerUp p) {
+    const cols = [Color(0xFFFFC107), Color(0xFFAB47BC), Color(0xFF4FC3F7)];
+    const emo = ['🛡️', '🧲', '❄️'];
+    final pulse = 1 + 0.08 * math.sin(engine.time * 4 + p.pos.dx);
+    final r = 1.7 * pulse;
+    c.drawCircle(p.pos, r, Paint()..color = const Color(0xE6FFFFFF));
+    c.drawCircle(
+        p.pos,
+        r,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.35
+          ..color = cols[p.type]);
+    final tp = _text(emo[p.type], 2.0, const Color(0xFF000000));
+    tp.paint(c, Offset(p.pos.dx - tp.width / 2, p.pos.dy - tp.height / 2));
+  }
+
   // ---------------- الدودة ----------------
 
-  void _drawWorm(Canvas canvas, Worm w) {
+  void _drawWorm(Canvas canvas, Worm w, bool lowFx) {
     final width = w.width;
     final ghost = w.invincible > 0;
-    if (ghost) {
-      canvas.saveLayer(null, Paint()..color = const Color(0x99FFFFFF));
-    }
+    final tier = w.tier;
+    final gc = glowColorFor(tier, engine.time);
 
     final path = Path()..moveTo(w.head.dx, w.head.dy);
     for (int i = w.trail.length - 1; i >= 0; i--) {
       path.lineTo(w.trail[i].dx, w.trail[i].dy);
     }
 
+    if (ghost) {
+      canvas.saveLayer(null, Paint()..color = const Color(0x99FFFFFF));
+    }
+
+    // التوهج حول الدودة: لون وقوة حسب المستوى
+    final pulse = 0.75 + 0.25 * math.sin(engine.time * 3 + w.id);
+    final gw = width + 0.9 + tier * 0.22;
+    final glow = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    if (lowFx) {
+      glow
+        ..strokeWidth = gw
+        ..color = gc.withAlpha(110);
+    } else {
+      glow
+        ..strokeWidth = gw + 0.6
+        ..color = gc.withAlpha((170 * pulse).round())
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 0.45 + tier * 0.1);
+    }
+    canvas.drawPath(path, glow);
+
     final hsl = HSLColor.fromColor(w.color);
-    final outlineColor = hsl.lightness < 0.2
+    final dark = hsl.lightness < 0.2
         ? const Color(0xFF616161)
         : hsl.withLightness((hsl.lightness * 0.55).clamp(0.0, 1.0)).toColor();
 
@@ -209,10 +291,18 @@ class WorldPainter extends CustomPainter {
         path,
         Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = width + 0.45
+          ..strokeWidth = width + 0.9
           ..strokeCap = StrokeCap.round
           ..strokeJoin = StrokeJoin.round
-          ..color = outlineColor);
+          ..color = dark);
+    canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = width + 0.5
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..color = gc);
     canvas.drawPath(
         path,
         Paint()
@@ -244,7 +334,8 @@ class WorldPainter extends CustomPainter {
 
     // الرأس والعيون
     final hp = w.head;
-    canvas.drawCircle(hp, width * 0.66, Paint()..color = outlineColor);
+    canvas.drawCircle(hp, width * 0.68, Paint()..color = gc);
+    canvas.drawCircle(hp, width * 0.62, Paint()..color = dark);
     canvas.drawCircle(hp, width * 0.58, Paint()..color = w.color);
     final d = Offset(math.cos(w.heading), math.sin(w.heading));
     final n = Offset(-d.dy, d.dx);
@@ -255,8 +346,10 @@ class WorldPainter extends CustomPainter {
           Paint()..color = const Color(0xFF000000));
     }
 
+    if (ghost) canvas.restore();
+
+    // حلقات القدرات
     if (ghost) {
-      canvas.restore();
       canvas.drawCircle(
           hp,
           width * 1.3,
@@ -265,11 +358,44 @@ class WorldPainter extends CustomPainter {
             ..strokeWidth = 0.25
             ..color = const Color(0xCCFFFFFF));
     }
+    if (w.shield > 0) {
+      canvas.drawCircle(
+          hp,
+          width * 1.6,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 0.4
+            ..color = const Color(0xFFFFC107));
+    }
+    if (w.magnet > 0) {
+      canvas.drawCircle(
+          hp,
+          width * 2.0 + 0.3 * math.sin(engine.time * 6),
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 0.25
+            ..color = const Color(0xAAAB47BC));
+    }
+    if (w.freeze > 0) {
+      final tp = _text('❄️', 1.8, const Color(0xFF000000));
+      tp.paint(canvas, Offset(hp.dx - tp.width / 2, hp.dy - tp.height / 2));
+    }
 
-    // اسم الدودة
+    // اللقب والاسم
     final tp = w.label;
-    tp.paint(canvas,
-        Offset(hp.dx - tp.width / 2, hp.dy - width * 1.3 - 1.0 - tp.height));
+    final labelTop = hp.dy - width * 1.3 - 1.0 - tp.height;
+    tp.paint(canvas, Offset(hp.dx - tp.width / 2, labelTop));
+
+    // فقاعة الرسالة السريعة
+    if (w.chatTimer > 0 && w.chat.isNotEmpty) {
+      final ct = _text(w.chat, 1.5, const Color(0xFF263238));
+      final bw = ct.width + 1.4;
+      final bh = ct.height + 0.8;
+      final rect = Rect.fromLTWH(hp.dx - bw / 2, labelTop - bh - 0.5, bw, bh);
+      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(0.8)),
+          Paint()..color = const Color(0xF2FFFFFF));
+      ct.paint(canvas, Offset(rect.left + 0.7, rect.top + 0.4));
+    }
 
     // مؤشر جاهزية التسريع للاعب
     if (w.isPlayer) {
@@ -294,7 +420,7 @@ class WorldPainter extends CustomPainter {
       }
       canvas.drawRRect(
           RRect.fromRectAndRadius(
-              Rect.fromLTWH(top.dx, top.dy, bw * frac, bh),
+              Rect.fromLTWH(top.dx, top.dy, bw * frac.clamp(0.0, 1.0), bh),
               const Radius.circular(0.35)),
           Paint()..color = col);
     }
@@ -413,13 +539,19 @@ class MiniMapPainter extends CustomPainter {
           ..strokeWidth = 2
           ..color = const Color(0xCCFFFFFF));
     final s = size.width / Cfg.arena;
+    for (final f in engine.fruits) {
+      if (f.type == 5) {
+        canvas.drawCircle(Offset(f.pos.dx * s, f.pos.dy * s), 2.2,
+            Paint()..color = const Color(0xFFFFC107));
+      }
+    }
+    final pl = engine.player;
     for (final w in engine.worms) {
-      if (!w.alive || w.isPlayer) continue;
+      if (!w.alive || identical(w, pl)) continue;
       final p = Offset(w.head.dx * s, w.head.dy * s);
       canvas.drawCircle(p, 3.5, Paint()..color = const Color(0xFF000000));
       canvas.drawCircle(p, 2.7, Paint()..color = w.color);
     }
-    final pl = engine.player;
     if (pl.alive) {
       final p = Offset(pl.head.dx * s, pl.head.dy * s);
       canvas.drawCircle(p, 5.5, Paint()..color = const Color(0xFFFFFFFF));

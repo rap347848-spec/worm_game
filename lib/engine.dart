@@ -3,7 +3,16 @@ import 'package:flutter/material.dart';
 import 'config.dart';
 import 'models.dart';
 
-enum Difficulty { easy, medium, hard }
+enum Difficulty { auto, easy, medium, hard }
+
+enum Role { solo, host, client }
+
+class HumanSeed {
+  final String peer;
+  final String name;
+  final int level;
+  const HumanSeed(this.peer, this.name, this.level);
+}
 
 class _Bp {
   final double look;
@@ -22,12 +31,15 @@ class _Bp {
   });
 }
 
-const _Bp _easy = _Bp(
-    look: 6, reaction: 0.35, hunt: 0.0, fruitRange: 22, boostChance: 0.0, turnMul: 0.8);
-const _Bp _medium = _Bp(
-    look: 9, reaction: 0.2, hunt: 0.25, fruitRange: 35, boostChance: 0.01, turnMul: 1.0);
-const _Bp _hard = _Bp(
-    look: 13, reaction: 0.1, hunt: 0.6, fruitRange: 55, boostChance: 0.04, turnMul: 1.15);
+/// ذكاء البوتات يتدرج من 0 (سهل) إلى 1 (صعب).
+_Bp _bpFor(double t) => _Bp(
+      look: 6 + 7 * t,
+      reaction: 0.35 - 0.25 * t,
+      hunt: 0.6 * t,
+      fruitRange: 22 + 33 * t,
+      boostChance: 0.04 * t,
+      turnMul: 0.8 + 0.35 * t,
+    );
 
 class _Death {
   final Worm w;
@@ -40,6 +52,12 @@ double angDiff(double a, double b) {
   if (d > math.pi) d -= 2 * math.pi;
   if (d < -math.pi) d += 2 * math.pi;
   return d;
+}
+
+double angNorm(double a) {
+  a = a % (2 * math.pi);
+  if (a > math.pi) a -= 2 * math.pi;
+  return a;
 }
 
 /// ألوان الدودات: لا يوجد أزرق ولا سماوي حتى لا تختفي على أرض الساحة.
@@ -62,116 +80,376 @@ const List<String> kBotNames = [
   'شبح', 'برق', 'رعد', 'نسر', 'ظل', 'قيس',
 ];
 
+typedef GameEventCb = void Function(String type, Worm w, Worm? other);
+
 class GameEngine extends ChangeNotifier {
   final math.Random rng = math.Random();
-  final Difficulty difficulty;
+  final Role role;
+  final bool practice;
+  int killsToWin;
+  int maxDeaths;
+  int myId = 0;
+
   final List<Worm> worms = <Worm>[];
   final List<Fruit> fruits = <Fruit>[];
-  late final Worm player;
-  late final _Bp _bp;
+  final List<PowerUp> powerUps = <PowerUp>[];
+
+  _Bp _bp = _bpFor(0.5);
+  final Worm _dummy = Worm(
+      id: -1,
+      name: '',
+      color: const Color(0xFF000000),
+      colorIdx: 0,
+      pattern: 0);
 
   bool over = false;
   Worm? winner;
+  int round = 0;
+  double time = 0;
   Offset cam = const Offset(Cfg.arena / 2, Cfg.arena / 2);
   Offset? lastDeathPos;
 
-  GameEngine({required int bots, required this.difficulty}) {
-    _bp = difficulty == Difficulty.easy
-        ? _easy
-        : (difficulty == Difficulty.medium ? _medium : _hard);
+  // إحصاءات اللاعب المحلي للمباراة الحالية
+  int myFruits = 0;
+  int bestStreak = 0;
+  final List<double> _killTimes = <double>[];
+
+  // ربط خارجي
+  GameEventCb? onEvent;
+  void Function(Map<String, dynamic>)? onSnapshot;
+  void Function(Map<String, dynamic>)? onSend;
+
+  final List<List<dynamic>> _pending = <List<dynamic>>[];
+  double _snapAcc = 0;
+  double _powerTimer = 8;
+  double _goldTimer = 15;
+  double _lastSendT = -1;
+  double _lastSentAngle = 0;
+
+  /// ---------------- الإنشاء ----------------
+
+  /// لعب فردي أو مضيف (يشغّل المحاكاة كاملة).
+  GameEngine({
+    required this.role,
+    int bots = 0,
+    Difficulty difficulty = Difficulty.auto,
+    String localName = 'أنت',
+    int localLevel = 1,
+    List<HumanSeed> humans = const <HumanSeed>[],
+    int kills = 10,
+    this.practice = false,
+  })  : killsToWin = kills,
+        maxDeaths = kills {
+    double t;
+    switch (difficulty) {
+      case Difficulty.easy:
+        t = 0.0;
+        break;
+      case Difficulty.medium:
+        t = 0.5;
+        break;
+      case Difficulty.hard:
+        t = 1.0;
+        break;
+      default:
+        t = (localLevel / 100.0).clamp(0.0, 1.0).toDouble();
+    }
+    _bp = _bpFor(t);
 
     final colors = List<int>.generate(kWormColors.length, (i) => i)
       ..shuffle(rng);
     final patterns = List<int>.generate(11, (i) => i)..shuffle(rng);
     final names = List<String>.from(kBotNames)..shuffle(rng);
 
-    player = Worm(
-      id: 0,
-      name: 'أنت',
-      isPlayer: true,
-      color: kWormColors[colors[0]],
-      pattern: patterns[0],
-    );
-    worms.add(player);
-    for (int i = 1; i <= bots; i++) {
-      worms.add(Worm(
-        id: i,
-        name: names[(i - 1) % names.length],
-        isPlayer: false,
-        color: kWormColors[colors[i]],
-        pattern: patterns[i],
-      ));
+    int ci = 0;
+    Worm make(int id, String name, int level, bool human, String? peer) {
+      final c = colors[ci % colors.length];
+      final p = patterns[ci % patterns.length];
+      ci++;
+      return Worm(
+        id: id,
+        name: name,
+        color: kWormColors[c],
+        colorIdx: c,
+        pattern: p,
+        isPlayer: id == 0,
+        human: human,
+        peer: peer,
+        level: level,
+      );
     }
+
+    worms.add(make(0, localName, localLevel, true, null));
+    for (int i = 0; i < humans.length; i++) {
+      worms.add(make(1 + i, humans[i].name, humans[i].level, true, humans[i].peer));
+    }
+    for (int i = 0; i < bots; i++) {
+      int lvl;
+      if (difficulty == Difficulty.auto) {
+        lvl = localLevel + rng.nextInt(17) - 8;
+      } else {
+        lvl = (t * 100).round() + rng.nextInt(11) - 5;
+      }
+      lvl = math.max(1, math.min(100, lvl));
+      worms.add(make(1 + humans.length + i, names[i % names.length], lvl, false, null));
+    }
+
     for (final w in worms) {
       final p = _freeSpot(minDist: 28);
       w.spawn(p, _headingToCenter(p));
     }
-    cam = player.head;
+    cam = worms.first.head;
     while (fruits.length < Cfg.fruitCount) {
       _addFruit();
     }
   }
 
-  // ---------------- التحكم من اللاعب ----------------
+  /// نسخة العميل: تعرض ما يرسله المضيف فقط.
+  GameEngine.client({required this.myId})
+      : role = Role.client,
+        practice = false,
+        killsToWin = 10,
+        maxDeaths = 10;
+
+  Worm get player {
+    for (final w in worms) {
+      if (w.id == myId) return w;
+    }
+    return _dummy;
+  }
+
+  int get otherHumans {
+    int n = 0;
+    for (final w in worms) {
+      if (w.human && w.id != myId) n++;
+    }
+    return n;
+  }
+
+  int get killStreak => _killTimes.length;
+
+  List<List<dynamic>> roster() => [
+        for (final w in worms)
+          [w.id, w.name, w.colorIdx, w.pattern, w.level, w.human ? 1 : 0]
+      ];
+
+  // ---------------- مدخلات اللاعب ----------------
 
   void steer(double angle) {
-    if (player.alive) player.target = angle;
+    if (!player.alive) return;
+    player.target = angle;
+    if (role == Role.client) {
+      if (time - _lastSendT > 0.04 &&
+          angDiff(angle, _lastSentAngle).abs() > 0.03) {
+        _lastSendT = time;
+        _lastSentAngle = angle;
+        onSend?.call({'t': 'in', 'a': (angNorm(angle) * 100).round(), 'b': 0});
+      }
+    }
   }
 
   void boost() {
     if (!player.alive) return;
-    if (player.boostTimer <= 0 && player.boostCooldown <= 0) {
-      player.boostTimer = Cfg.boostDuration;
+    if (role == Role.client) {
+      onSend?.call({
+        't': 'in',
+        'a': (angNorm(player.target) * 100).round(),
+        'b': 1
+      });
+    } else {
+      _boostWorm(player);
     }
+  }
+
+  void _boostWorm(Worm w) {
+    if (w.boostTimer <= 0 && w.boostCooldown <= 0) {
+      w.boostTimer = Cfg.boostDuration;
+    }
+  }
+
+  void say(Worm w, int idx) {
+    w.chat = kChat[idx % kChat.length];
+    w.chatTimer = 3.5;
+  }
+
+  void sayLocal(int idx) {
+    if (role == Role.client) {
+      onSend?.call({'t': 'chat', 'm': idx});
+    } else {
+      say(player, idx);
+    }
+  }
+
+  /// المضيف: استقبال حركة لاعب بعيد.
+  void remoteInput(String peer, Map<String, dynamic> m) {
+    for (final w in worms) {
+      if (w.peer != peer || !w.human) continue;
+      if (m['t'] == 'chat') {
+        say(w, (m['m'] as num).toInt());
+      } else if (w.alive) {
+        w.target = (m['a'] as num) / 100.0;
+        if (m['b'] == 1) _boostWorm(w);
+      }
+    }
+  }
+
+  /// انقطع لاعب: يستلمه بوت.
+  void humanLeft(String peer) {
+    for (final w in worms) {
+      if (w.peer == peer) {
+        w.human = false;
+        w.peer = null;
+      }
+    }
+    notifyListeners();
+  }
+
+  /// جولة جديدة بنفس اللاعبين.
+  void reset() {
+    round++;
+    over = false;
+    winner = null;
+    fruits.clear();
+    powerUps.clear();
+    myFruits = 0;
+    bestStreak = 0;
+    _killTimes.clear();
+    _pending.clear();
+    for (final w in worms) {
+      w.kills = 0;
+      w.deaths = 0;
+      w.eliminated = false;
+      w.alive = false;
+      w.chatTimer = 0;
+    }
+    for (final w in worms) {
+      final p = _freeSpot(minDist: 28);
+      w.spawn(p, _headingToCenter(p));
+    }
+    while (fruits.length < Cfg.fruitCount) {
+      _addFruit();
+    }
+    _powerTimer = 8;
+    _goldTimer = 15;
+    notifyListeners();
   }
 
   // ---------------- الحلقة الرئيسية ----------------
 
   void update(double dt) {
-    if (over) return;
-
+    time += dt;
     for (final w in worms) {
-      if (w.eliminated) continue;
-      if (!w.alive) {
-        w.respawnTimer -= dt;
-        if (w.respawnTimer <= 0) _respawn(w);
-        continue;
-      }
-      if (w.invincible > 0) w.invincible -= dt;
-
-      if (w.boostTimer > 0) {
-        w.boostTimer -= dt;
-        if (w.boostTimer <= 0) {
-          w.boostTimer = 0;
-          w.boostCooldown = Cfg.boostCooldown;
-        }
-      } else if (w.boostCooldown > 0) {
-        w.boostCooldown -= dt;
-      }
-
-      if (!w.isPlayer) _think(w, dt);
-
-      final diff = angDiff(w.target, w.heading);
-      final maxTurn = Cfg.turnRate * dt * (w.isPlayer ? 1.0 : _bp.turnMul);
-      w.heading += math.max(-maxTurn, math.min(maxTurn, diff));
-      w.advance(dt, Cfg.speed * (w.boosting ? Cfg.boostMult : 1.0));
+      if (w.chatTimer > 0) w.chatTimer -= dt;
+    }
+    if (role == Role.client) {
+      _updateCamera(dt);
+      notifyListeners();
+      return;
     }
 
-    _eat();
-    _collisions();
-    _spawnFruits();
+    if (!over) {
+      for (final w in worms) {
+        if (w.eliminated) continue;
+        if (!w.alive) {
+          w.respawnTimer -= dt;
+          if (w.respawnTimer <= 0) {
+            _respawn(w);
+            _emit('respawn', w);
+          }
+          continue;
+        }
+        if (w.invincible > 0) w.invincible -= dt;
+        if (w.shield > 0) w.shield -= dt;
+        if (w.freeze > 0) w.freeze -= dt;
+
+        if (w.magnet > 0) {
+          w.magnet -= dt;
+          for (final f in fruits) {
+            final dx = w.head.dx - f.pos.dx;
+            final dy = w.head.dy - f.pos.dy;
+            final d2 = dx * dx + dy * dy;
+            if (d2 < Cfg.magnetRadius * Cfg.magnetRadius && d2 > 0.01) {
+              final d = math.sqrt(d2);
+              final mv = math.min(d, Cfg.magnetPull * dt);
+              f.pos = Offset(f.pos.dx + dx / d * mv, f.pos.dy + dy / d * mv);
+            }
+          }
+        }
+
+        if (w.boostTimer > 0) {
+          w.boostTimer -= dt;
+          if (w.boostTimer <= 0) {
+            w.boostTimer = 0;
+            w.boostCooldown = Cfg.boostCooldown;
+          }
+        } else if (w.boostCooldown > 0) {
+          w.boostCooldown -= dt;
+        }
+
+        if (!w.human) _think(w, dt);
+
+        final diff = angDiff(w.target, w.heading);
+        final maxTurn = Cfg.turnRate * dt * (w.human ? 1.0 : _bp.turnMul);
+        w.heading += math.max(-maxTurn, math.min(maxTurn, diff));
+        double sp = Cfg.speed * (w.boosting ? Cfg.boostMult : 1.0);
+        if (w.freeze > 0) sp *= Cfg.freezeSlow;
+        w.advance(dt, sp);
+      }
+
+      _eat();
+      _collisions();
+      _spawnFruits();
+      _spawnSpecials(dt);
+    }
     _updateCamera(dt);
+
+    if (role == Role.host && onSnapshot != null) {
+      _snapAcc += dt;
+      if (_snapAcc >= 1.0 / Cfg.snapshotHz) {
+        _snapAcc = 0;
+        onSnapshot!(snapshot());
+        _pending.clear();
+      }
+    }
     notifyListeners();
   }
 
-  // ---------------- الفواكه ----------------
+  // ---------------- الأحداث ----------------
+
+  void _emit(String type, Worm w, [Worm? other]) {
+    _track(type, w);
+    onEvent?.call(type, w, other);
+    if (role == Role.host && _pending.length < 40) {
+      _pending.add([type, w.id, other?.id ?? -1]);
+    }
+  }
+
+  void _track(String type, Worm w) {
+    if (!w.isPlayer) return;
+    if (type == 'eat') myFruits++;
+    if (type == 'kill') {
+      _killTimes.add(time);
+      _killTimes.removeWhere((t) => time - t > 6);
+      if (_killTimes.length > bestStreak) bestStreak = _killTimes.length;
+    }
+  }
+
+  Worm? _byId(int id) {
+    for (final w in worms) {
+      if (w.id == id) return w;
+    }
+    return null;
+  }
+
+  // ---------------- الفواكه والقدرات ----------------
+
+  Offset _randPos([double margin = 4]) => Offset(
+        margin + rng.nextDouble() * (Cfg.arena - 2 * margin),
+        margin + rng.nextDouble() * (Cfg.arena - 2 * margin),
+      );
 
   void _addFruit() {
-    fruits.add(Fruit(
-      Offset(3 + rng.nextDouble() * (Cfg.arena - 6),
-          3 + rng.nextDouble() * (Cfg.arena - 6)),
-      rng.nextInt(5),
-    ));
+    fruits.add(Fruit(_randPos(3), rng.nextInt(5)));
   }
 
   void _spawnFruits() {
@@ -179,6 +457,25 @@ class GameEngine extends ChangeNotifier {
     while (fruits.length < Cfg.fruitCount && guard < 5) {
       _addFruit();
       guard++;
+    }
+  }
+
+  void _spawnSpecials(double dt) {
+    _powerTimer -= dt;
+    if (_powerTimer <= 0) {
+      _powerTimer = 10 + rng.nextDouble() * 6;
+      if (powerUps.length < Cfg.maxPowerUps) {
+        powerUps.add(PowerUp(_randPos(6), rng.nextInt(3)));
+      }
+    }
+    _goldTimer -= dt;
+    if (_goldTimer <= 0) {
+      _goldTimer = 20 + rng.nextDouble() * 10;
+      bool has = false;
+      for (final f in fruits) {
+        if (f.type == 5) has = true;
+      }
+      if (!has) fruits.add(Fruit(_randPos(6), 5, Cfg.goldenValue));
     }
   }
 
@@ -193,6 +490,30 @@ class GameEngine extends ChangeNotifier {
         if (dx * dx + dy * dy < thr2) {
           w.eaten += fruits[i].value;
           fruits.removeAt(i);
+          _emit('eat', w);
+        }
+      }
+      final pthr = w.width / 2 + 2.2;
+      for (int i = powerUps.length - 1; i >= 0; i--) {
+        if ((w.head - powerUps[i].pos).distance < pthr) {
+          _applyPower(w, powerUps[i].type);
+          powerUps.removeAt(i);
+          _emit('power', w);
+        }
+      }
+    }
+  }
+
+  void _applyPower(Worm w, int type) {
+    if (type == 0) {
+      w.shield = Cfg.shieldTime;
+    } else if (type == 1) {
+      w.magnet = Cfg.magnetTime;
+    } else {
+      for (final o in worms) {
+        if (identical(o, w) || !o.alive) continue;
+        if ((o.head - w.head).distance < Cfg.freezeRadius) {
+          o.freeze = Cfg.freezeTime;
         }
       }
     }
@@ -208,10 +529,7 @@ class GameEngine extends ChangeNotifier {
       final hx = a.head.dx;
       final hy = a.head.dy;
 
-      if (hx - r < 0 ||
-          hy - r < 0 ||
-          hx + r > Cfg.arena ||
-          hy + r > Cfg.arena) {
+      if (hx - r < 0 || hy - r < 0 || hx + r > Cfg.arena || hy + r > Cfg.arena) {
         deaths.add(_Death(a, null));
         continue;
       }
@@ -246,10 +564,28 @@ class GameEngine extends ChangeNotifier {
     }
 
     for (final d in deaths) {
-      if (!d.w.alive) continue;
-      _kill(d.w, d.killer);
+      final v = d.w;
+      if (!v.alive) continue;
+      if (v.shield > 0) {
+        // الدرع يحمي من موت واحد
+        v.shield = 0;
+        v.invincible = 1.5;
+        _bounce(v);
+        continue;
+      }
+      _kill(v, d.killer);
     }
     if (deaths.isNotEmpty) _checkEnd();
+  }
+
+  void _bounce(Worm w) {
+    w.head = Offset(
+      w.head.dx.clamp(3.0, Cfg.arena - 3.0).toDouble(),
+      w.head.dy.clamp(3.0, Cfg.arena - 3.0).toDouble(),
+    );
+    final a = _headingToCenter(w.head);
+    w.heading = a;
+    w.target = a;
   }
 
   void _kill(Worm w, Worm? killer) {
@@ -258,11 +594,13 @@ class GameEngine extends ChangeNotifier {
     _dropFruits(w);
     if (w.isPlayer) lastDeathPos = w.head;
     if (killer != null && !identical(killer, w)) killer.kills++;
-    if (w.deaths >= Cfg.maxDeaths) {
+    if (w.deaths >= maxDeaths) {
       w.eliminated = true;
     } else {
       w.respawnTimer = Cfg.respawnDelay;
     }
+    _emit('death', w);
+    if (killer != null && !identical(killer, w)) _emit('kill', killer, w);
   }
 
   /// الدودة الميتة تتحول إلى فواكه بطول جسمها.
@@ -289,7 +627,7 @@ class GameEngine extends ChangeNotifier {
   void _checkEnd() {
     Worm? best;
     for (final w in worms) {
-      if (w.kills >= Cfg.killsToWin) {
+      if (w.kills >= killsToWin) {
         if (best == null || w.kills > best.kills) best = w;
       }
     }
@@ -310,8 +648,7 @@ class GameEngine extends ChangeNotifier {
   Offset _freeSpot({double minDist = 20}) {
     Offset best = const Offset(Cfg.arena / 2, Cfg.arena / 2);
     for (int t = 0; t < 30; t++) {
-      final p = Offset(15 + rng.nextDouble() * (Cfg.arena - 30),
-          15 + rng.nextDouble() * (Cfg.arena - 30));
+      final p = _randPos(15);
       bool ok = true;
       for (final w in worms) {
         if (!w.alive) continue;
@@ -334,12 +671,13 @@ class GameEngine extends ChangeNotifier {
   // ---------------- الكاميرا ----------------
 
   void _updateCamera(double dt) {
-    if (player.alive) {
-      cam = player.head;
+    final p = player;
+    if (p.alive) {
+      cam = p.head;
       return;
     }
     Offset t = lastDeathPos ?? cam;
-    if (player.eliminated) {
+    if (p.eliminated) {
       Worm? best;
       for (final w in worms) {
         if (!w.alive) continue;
@@ -396,18 +734,29 @@ class GameEngine extends ChangeNotifier {
       }
     }
 
-    // أقرب فاكهة
-    Fruit? bestF;
-    double bd = _bp.fruitRange;
+    // أفضل هدف: فاكهة (الذهبية أغلى) أو قدرة
+    Offset? best;
+    double bs = double.infinity;
     for (final f in fruits) {
       final d = (f.pos - h).distance;
-      if (d < bd) {
-        bd = d;
-        bestF = f;
+      if (d > _bp.fruitRange) continue;
+      final s = d / (f.type == 5 ? 3.0 : 1.0);
+      if (s < bs) {
+        bs = s;
+        best = f.pos;
       }
     }
-    if (bestF != null) {
-      return math.atan2(bestF.pos.dy - h.dy, bestF.pos.dx - h.dx);
+    for (final p in powerUps) {
+      final d = (p.pos - h).distance;
+      if (d > _bp.fruitRange) continue;
+      final s = d / 2.5;
+      if (s < bs) {
+        bs = s;
+        best = p.pos;
+      }
+    }
+    if (best != null) {
+      return math.atan2(best.dy - h.dy, best.dx - h.dx);
     }
 
     return w.heading + (rng.nextDouble() - 0.5) * 1.2;
@@ -452,5 +801,156 @@ class GameEngine extends ChangeNotifier {
       }
     }
     return true;
+  }
+
+  // ---------------- الشبكة: لقطة المضيف ----------------
+
+  int _q(double v) => (v * 10).round();
+
+  Map<String, dynamic> snapshot() {
+    final ws = <List<dynamic>>[];
+    for (final w in worms) {
+      final tr = <int>[];
+      for (int i = w.trail.length - 1; i >= 0; i -= 2) {
+        tr.add(_q(w.trail[i].dx));
+        tr.add(_q(w.trail[i].dy));
+      }
+      ws.add([
+        w.id,
+        _q(w.head.dx),
+        _q(w.head.dy),
+        (angNorm(w.heading) * 100).round(),
+        (w.alive ? 1 : 0) | (w.eliminated ? 2 : 0),
+        w.kills,
+        w.deaths,
+        _q(w.eaten),
+        _q(w.invincible),
+        _q(w.boostTimer),
+        _q(w.boostCooldown),
+        _q(w.respawnTimer),
+        _q(w.shield),
+        _q(w.magnet),
+        _q(w.freeze),
+        tr,
+      ]);
+    }
+    final ch = <List<dynamic>>[];
+    for (final w in worms) {
+      if (w.chatTimer > 0) {
+        ch.add([w.id, kChat.indexOf(w.chat), _q(w.chatTimer)]);
+      }
+    }
+    return {
+      't': 'snap',
+      'r': round,
+      'o': over ? 1 : 0,
+      'w': winner?.id ?? -1,
+      'ws': ws,
+      'f': [
+        for (final f in fruits) [_q(f.pos.dx), _q(f.pos.dy), f.type]
+      ],
+      'p': [
+        for (final p in powerUps) [_q(p.pos.dx), _q(p.pos.dy), p.type]
+      ],
+      'ch': ch,
+      'ev': List<List<dynamic>>.from(_pending),
+    };
+  }
+
+  // ---------------- الشبكة: العميل ----------------
+
+  void applyRoster(List<dynamic> r, int you, int k) {
+    myId = you;
+    killsToWin = k;
+    maxDeaths = k;
+    worms.clear();
+    fruits.clear();
+    powerUps.clear();
+    for (final e in r) {
+      final c = (e[2] as num).toInt();
+      worms.add(Worm(
+        id: (e[0] as num).toInt(),
+        name: e[1] as String,
+        color: kWormColors[c % kWormColors.length],
+        colorIdx: c,
+        pattern: (e[3] as num).toInt(),
+        level: (e[4] as num).toInt(),
+        human: e[5] == 1,
+        isPlayer: (e[0] as num).toInt() == you,
+      ));
+    }
+    over = false;
+    winner = null;
+    notifyListeners();
+  }
+
+  void applySnapshot(Map<String, dynamic> m) {
+    if (worms.isEmpty) return;
+    final r = (m['r'] as num).toInt();
+    if (r != round) {
+      round = r;
+      myFruits = 0;
+      bestStreak = 0;
+      _killTimes.clear();
+    }
+    over = m['o'] == 1;
+    final wid = (m['w'] as num).toInt();
+    winner = wid >= 0 ? _byId(wid) : null;
+
+    double d(dynamic v) => (v as num) / 10.0;
+
+    for (final e in m['ws'] as List) {
+      final w = _byId((e[0] as num).toInt());
+      if (w == null) continue;
+      final wasAlive = w.alive;
+      w.head = Offset(d(e[1]), d(e[2]));
+      w.heading = (e[3] as num) / 100.0;
+      final fl = (e[4] as num).toInt();
+      w.alive = (fl & 1) != 0;
+      w.eliminated = (fl & 2) != 0;
+      w.kills = (e[5] as num).toInt();
+      w.deaths = (e[6] as num).toInt();
+      w.eaten = d(e[7]);
+      w.invincible = d(e[8]);
+      w.boostTimer = d(e[9]);
+      w.boostCooldown = d(e[10]);
+      w.respawnTimer = d(e[11]);
+      w.shield = d(e[12]);
+      w.magnet = d(e[13]);
+      w.freeze = d(e[14]);
+      final tr = e[15] as List;
+      w.trail.clear();
+      for (int i = tr.length - 2; i >= 0; i -= 2) {
+        w.trail.add(Offset(d(tr[i]), d(tr[i + 1])));
+      }
+      if (w.isPlayer && wasAlive && !w.alive) lastDeathPos = w.head;
+    }
+
+    fruits.clear();
+    for (final f in m['f'] as List) {
+      final type = (f[2] as num).toInt();
+      fruits.add(Fruit(Offset(d(f[0]), d(f[1])), type,
+          type == 5 ? Cfg.goldenValue : 1.0));
+    }
+    powerUps.clear();
+    for (final p in m['p'] as List) {
+      powerUps.add(PowerUp(Offset(d(p[0]), d(p[1])), (p[2] as num).toInt()));
+    }
+    for (final c in m['ch'] as List) {
+      final w = _byId((c[0] as num).toInt());
+      final idx = (c[1] as num).toInt();
+      if (w != null && idx >= 0) {
+        w.chat = kChat[idx % kChat.length];
+        w.chatTimer = d(c[2]);
+      }
+    }
+    for (final ev in m['ev'] as List) {
+      final w = _byId((ev[1] as num).toInt());
+      if (w == null) continue;
+      final o = (ev[2] as num).toInt() >= 0 ? _byId((ev[2] as num).toInt()) : null;
+      _track(ev[0] as String, w);
+      onEvent?.call(ev[0] as String, w, o);
+    }
+    notifyListeners();
   }
 }

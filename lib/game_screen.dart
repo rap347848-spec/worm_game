@@ -1,15 +1,20 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'config.dart';
 import 'engine.dart';
 import 'models.dart';
+import 'net.dart';
 import 'painters.dart';
+import 'progress.dart';
+import 'sfx.dart';
 
 class GameScreen extends StatefulWidget {
-  final int bots;
-  final Difficulty difficulty;
-  const GameScreen({super.key, required this.bots, required this.difficulty});
+  final GameEngine engine;
+  final NetHost? host;
+  final NetClient? client;
+  const GameScreen({super.key, required this.engine, this.host, this.client});
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -17,11 +22,13 @@ class GameScreen extends StatefulWidget {
 
 class _GameScreenState extends State<GameScreen>
     with SingleTickerProviderStateMixin {
-  late GameEngine _engine;
-  late WorldPainter _painter;
+  late final GameEngine _engine = widget.engine;
+  late final WorldPainter _painter = WorldPainter(_engine);
   late final Ticker _ticker;
   Duration _last = Duration.zero;
   bool _paused = false;
+  bool _chatOpen = false;
+  bool _lost = false;
 
   Offset? _mapPos;
   Offset? _boardPos;
@@ -30,6 +37,13 @@ class _GameScreenState extends State<GameScreen>
   Offset _anchor = Offset.zero;
   int _lastDownMs = -100000;
   Offset _lastDownPos = Offset.zero;
+  int _lastEat2 = 0;
+
+  String _flash = '';
+  double _flashUntil = 0;
+
+  int _recordedRound = -1;
+  MatchReward? _reward;
 
   static const double _mapSize = 110;
   static const double _boardW = 150;
@@ -37,18 +51,49 @@ class _GameScreenState extends State<GameScreen>
   @override
   void initState() {
     super.initState();
-    _newGame();
+    _engine.onEvent = _onEvent;
+
+    final host = widget.host;
+    if (host != null) {
+      _engine.onSnapshot = (m) => host.broadcast(m);
+      host.onMessage = (peer, m) {
+        if (m['t'] == 'in' || m['t'] == 'chat') _engine.remoteInput(peer, m);
+      };
+      host.onLeft = (peer) => _engine.humanLeft(peer);
+    }
+    final client = widget.client;
+    if (client != null) {
+      _engine.onSend = (m) => client.send(m);
+      client.onMessage = (m) {
+        final t = m['t'];
+        if (t == 'snap') {
+          _engine.applySnapshot(m);
+        } else if (t == 'start') {
+          _engine.applyRoster(
+              m['roster'] as List, (m['you'] as num).toInt(), (m['k'] as num).toInt());
+        } else if (t == 'bye') {
+          _connectionLost();
+        }
+      };
+      client.onDisconnected = _connectionLost;
+    }
     _ticker = createTicker(_onTick)..start();
   }
 
-  void _newGame() {
-    _engine = GameEngine(bots: widget.bots, difficulty: widget.difficulty);
-    _painter = WorldPainter(_engine);
+  void _connectionLost() {
+    if (!mounted || _lost) return;
+    setState(() => _lost = true);
   }
 
   @override
   void dispose() {
     _ticker.dispose();
+    _engine.onEvent = null;
+    _engine.onSnapshot = null;
+    _engine.onSend = null;
+    widget.host?.broadcast({'t': 'bye'});
+    widget.host?.stop();
+    widget.client?.stop();
     _engine.dispose();
     super.dispose();
   }
@@ -58,14 +103,94 @@ class _GameScreenState extends State<GameScreen>
         ((elapsed - _last).inMicroseconds / 1000000.0).clamp(0.0, 0.05).toDouble();
     _last = elapsed;
     if (!_paused) _engine.update(dt);
+    if (_engine.over && _recordedRound != _engine.round) _finish();
+  }
+
+  // ---------------- الأصوات والاهتزاز ----------------
+
+  void _onEvent(String type, Worm w, Worm? other) {
+    final s = Store.i.settings;
+    switch (type) {
+      case 'eat':
+        if (w.isPlayer) {
+          if (s.eatAll && s.eatMine) Sfx.i.play('eat');
+        } else if (s.eatAll && s.eatOthers) {
+          final now = DateTime.now().millisecondsSinceEpoch;
+          if (now - _lastEat2 > 140 && (w.head - _engine.cam).distance < 28) {
+            _lastEat2 = now;
+            Sfx.i.play('eat2');
+          }
+        }
+        break;
+      case 'kill':
+        if (w.isPlayer) {
+          if (s.sfxOther) Sfx.i.play('kill');
+          if (s.vibration) HapticFeedback.lightImpact();
+          _streakFlash(other);
+        }
+        break;
+      case 'death':
+        if (w.isPlayer) {
+          if (s.sfxOther) Sfx.i.play('death');
+          if (s.vibration) HapticFeedback.heavyImpact();
+        }
+        break;
+      case 'power':
+        if (w.isPlayer && s.sfxOther) Sfx.i.play('power');
+        break;
+    }
+  }
+
+  void _streakFlash(Worm? victim) {
+    final n = _engine.killStreak;
+    String t;
+    if (n >= 5) {
+      t = 'مجزرة! 👑';
+    } else if (n == 4) {
+      t = 'قتل رباعي! 💥';
+    } else if (n == 3) {
+      t = 'قتل ثلاثي! 🔥';
+    } else if (n == 2) {
+      t = 'قتل مزدوج! ⚔️';
+    } else {
+      t = 'أطحت بـ ${victim?.name ?? 'خصم'}!';
+    }
+    _flash = t;
+    _flashUntil = _engine.time + 2.2;
+  }
+
+  // ---------------- نهاية المباراة ----------------
+
+  void _finish() {
+    _recordedRound = _engine.round;
+    if (_engine.practice) return;
+    final me = _engine.player;
+    final opp = <String, int>{};
+    for (final w in _engine.worms) {
+      if (w.human && !identical(w, me)) opp[w.name] = w.level;
+    }
+    final res = MatchResult(
+      won: _engine.winner != null && identical(_engine.winner, me),
+      kills: me.kills,
+      deaths: me.deaths,
+      fruits: _engine.myFruits,
+      bestStreak: _engine.bestStreak,
+      otherHumans: _engine.otherHumans,
+      opponents: opp,
+    );
+    final rw = Store.i.recordMatch(res);
+    if (rw.levelAfter > rw.levelBefore) {
+      if (Store.i.settings.sfxOther) Sfx.i.play('level');
+      if (Store.i.settings.vibration) HapticFeedback.mediumImpact();
+    }
+    setState(() => _reward = rw);
   }
 
   // ---------------- اللمس: توجيه + ضغطتان للتسريع ----------------
 
   void _down(PointerDownEvent e) {
     final now = e.timeStamp.inMilliseconds;
-    if (now - _lastDownMs < 300 &&
-        (e.position - _lastDownPos).distance < 90) {
+    if (now - _lastDownMs < 300 && (e.position - _lastDownPos).distance < 90) {
       _engine.boost();
       _lastDownMs = -100000;
     } else {
@@ -78,13 +203,15 @@ class _GameScreenState extends State<GameScreen>
 
   void _move(PointerMoveEvent e) {
     if (e.pointer != _pid) return;
+    final sens = Store.i.settings.sensitivity;
     final d = e.localPosition - _anchor;
     final dist = d.distance;
-    if (dist > 6) {
+    if (dist > 6 / sens) {
       _engine.steer(math.atan2(d.dy, d.dx));
     }
-    if (dist > 28) {
-      _anchor = e.localPosition - d / dist * 28;
+    final maxD = 28 / sens;
+    if (dist > maxD) {
+      _anchor = e.localPosition - d / dist * maxD;
     }
   }
 
@@ -102,6 +229,7 @@ class _GameScreenState extends State<GameScreen>
         final size = box.biggest;
         _mapPos ??= const Offset(8, 8);
         _boardPos ??= Offset(size.width - _boardW - 8, 8);
+        final multi = _engine.role != Role.solo;
 
         return Stack(
           children: [
@@ -167,7 +295,55 @@ class _GameScreenState extends State<GameScreen>
               ),
             ),
 
-            // رسائل الحالة (موت / خروج)
+            // الرسائل السريعة (في اللعب الجماعي فقط)
+            if (multi)
+              Positioned(
+                bottom: 8,
+                left: size.width / 2 - 20,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _chatOpen = !_chatOpen),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: const BoxDecoration(
+                        color: Color(0x66000000), shape: BoxShape.circle),
+                    child: const Icon(Icons.chat_bubble_outline,
+                        color: Colors.white, size: 20),
+                  ),
+                ),
+              ),
+            if (multi && _chatOpen)
+              Positioned(
+                bottom: 54,
+                left: 40,
+                right: 40,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                        color: const Color(0xCC000000),
+                        borderRadius: BorderRadius.circular(14)),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        for (int i = 0; i < kChat.length; i++)
+                          ActionChip(
+                            label: Text(kChat[i]),
+                            onPressed: () {
+                              _engine.sayLocal(i);
+                              setState(() => _chatOpen = false);
+                            },
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+            // رسائل الحالة (موت / خروج / سلسلة قتل)
             Positioned(
               top: 56,
               left: 0,
@@ -187,8 +363,8 @@ class _GameScreenState extends State<GameScreen>
                   _engine.over ? _resultOverlay(size) : const SizedBox.shrink(),
             ),
 
-            // شاشة الإيقاف المؤقت
-            if (_paused && !_engine.over) _pauseOverlay(),
+            if (_paused && !_engine.over) _pauseOverlay(size),
+            if (_lost) _lostOverlay(size),
           ],
         );
       }),
@@ -208,7 +384,8 @@ class _GameScreenState extends State<GameScreen>
         return a.deaths.compareTo(b.deaths);
       });
     final shown = sorted.take(6).toList();
-    if (!shown.contains(_engine.player)) shown.add(_engine.player);
+    final me = _engine.player;
+    if (!shown.contains(me) && _engine.worms.contains(me)) shown.add(me);
 
     return Container(
       width: _boardW,
@@ -221,8 +398,8 @@ class _GameScreenState extends State<GameScreen>
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('الترتيب  (قتل / موت)',
-              style: TextStyle(
+          Text('الترتيب  (من ${_engine.killsToWin} قتلات)',
+              style: const TextStyle(
                   color: Colors.white70,
                   fontSize: 11,
                   fontWeight: FontWeight.bold)),
@@ -255,7 +432,7 @@ class _GameScreenState extends State<GameScreen>
                               : TextDecoration.none),
                     ),
                   ),
-                  Text('${w.kills}/${Cfg.killsToWin} · ${w.deaths}',
+                  Text('${w.kills} · ☠${w.deaths}',
                       style: const TextStyle(color: Colors.white, fontSize: 11)),
                 ],
               ),
@@ -268,11 +445,13 @@ class _GameScreenState extends State<GameScreen>
   Widget _statusBanner() {
     final p = _engine.player;
     String? text;
-    if (_engine.over) {
+    if (_engine.time < _flashUntil) {
+      text = _flash;
+    } else if (_engine.over) {
       text = null;
     } else if (p.eliminated) {
-      text = 'خرجت من المباراة (${Cfg.maxDeaths} موتات) — تتابع المشاهدة';
-    } else if (!p.alive) {
+      text = 'خرجت من المباراة (${_engine.maxDeaths} موتات) — تتابع المشاهدة';
+    } else if (!p.alive && _engine.worms.contains(p)) {
       text = 'ستعود خلال ${p.respawnTimer.ceil().clamp(1, 9)} ثانية';
     }
     if (text == null) return const SizedBox.shrink();
@@ -294,8 +473,8 @@ class _GameScreenState extends State<GameScreen>
         color: const Color(0xAA000000),
         alignment: Alignment.center,
         child: Container(
-          width: 340,
-          constraints: BoxConstraints(maxHeight: size.height * 0.9),
+          width: 360,
+          constraints: BoxConstraints(maxHeight: size.height * 0.92),
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
               color: const Color(0xFF16313F),
@@ -306,39 +485,63 @@ class _GameScreenState extends State<GameScreen>
     );
   }
 
-  Widget _pauseOverlay() {
-    return Builder(builder: (context) {
-      final size = MediaQuery.of(context).size;
-      return _dialog(
-        size,
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('إيقاف مؤقت',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold)),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: () => setState(() => _paused = false),
-                child: const Text('متابعة'),
-              ),
+  void _toMenu() => Navigator.of(context).popUntil((r) => r.isFirst);
+
+  Widget _pauseOverlay(Size size) {
+    return _dialog(
+      size,
+      Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('إيقاف مؤقت',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold)),
+          if (_engine.role != Role.solo)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text('في اللعب الجماعي تستمر المباراة عند الآخرين',
+                  style: TextStyle(color: Colors.white60, fontSize: 12)),
             ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('القائمة الرئيسية'),
-              ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: () => setState(() => _paused = false),
+              child: const Text('متابعة'),
             ),
-          ],
-        ),
-      );
-    });
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: _toMenu,
+              child: const Text('القائمة الرئيسية'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _lostOverlay(Size size) {
+    return _dialog(
+      size,
+      Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('انقطع الاتصال بالمضيف',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          FilledButton(
+              onPressed: _toMenu, child: const Text('القائمة الرئيسية')),
+        ],
+      ),
+    );
   }
 
   Widget _resultOverlay(Size size) {
@@ -347,10 +550,11 @@ class _GameScreenState extends State<GameScreen>
         if (b.kills != a.kills) return b.kills.compareTo(a.kills);
         return a.deaths.compareTo(b.deaths);
       });
-    final won = e.winner != null && e.winner!.isPlayer;
+    final won = e.winner != null && identical(e.winner, e.player);
     final title = won
         ? '🏆 فزت بالمباراة!'
         : 'انتهت المباراة — الفائز: ${e.winner?.name ?? ''}';
+    final rw = _reward;
 
     return _dialog(
       size,
@@ -364,11 +568,19 @@ class _GameScreenState extends State<GameScreen>
                   color: Colors.white,
                   fontSize: 18,
                   fontWeight: FontWeight.bold)),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           Flexible(
             child: SingleChildScrollView(
               child: Column(
                 children: [
+                  if (e.practice)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 6),
+                      child: Text('وضع التدريب: لا يؤثر على مستواك',
+                          style: TextStyle(color: Colors.white60, fontSize: 12)),
+                    ),
+                  if (rw != null) _rewardBox(rw),
+                  _awards(ranking),
                   for (int i = 0; i < ranking.length; i++)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 3),
@@ -408,20 +620,94 @@ class _GameScreenState extends State<GameScreen>
               ),
             ),
           ),
-          const SizedBox(height: 12),
-          FilledButton(
-            onPressed: () => setState(() {
-              _engine.dispose();
-              _newGame();
-              _paused = false;
-            }),
-            child: const Text('لعبة جديدة'),
-          ),
+          const SizedBox(height: 10),
+          if (e.role == Role.client)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text('بانتظار المضيف لبدء جولة جديدة...',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white70)),
+            )
+          else
+            FilledButton(
+              onPressed: () => setState(() {
+                e.reset();
+                _reward = null;
+                _paused = false;
+              }),
+              child: const Text('جولة جديدة'),
+            ),
           const SizedBox(height: 8),
           OutlinedButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: _toMenu,
             child: const Text('القائمة الرئيسية'),
           ),
+        ],
+      ),
+    );
+  }
+
+  /// جوائز ما بعد المباراة.
+  Widget _awards(List<Worm> ranking) {
+    if (ranking.isEmpty) return const SizedBox.shrink();
+    Worm topKiller = ranking.first;
+    Worm longest = ranking.first;
+    for (final w in ranking) {
+      if (w.kills > topKiller.kills) topKiller = w;
+      if (w.eaten > longest.eaten) longest = w;
+    }
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+          color: const Color(0x22FFFFFF), borderRadius: BorderRadius.circular(10)),
+      child: Column(
+        children: [
+          Text('⚔️ أكثر قتلاً: ${topKiller.name} (${topKiller.kills})',
+              style: const TextStyle(color: Colors.white, fontSize: 13)),
+          Text('📏 الأطول دودة: ${longest.name}',
+              style: const TextStyle(color: Colors.white, fontSize: 13)),
+          Text('🍎 فواكهك: ${_engine.myFruits}',
+              style: const TextStyle(color: Colors.white, fontSize: 13)),
+        ],
+      ),
+    );
+  }
+
+  Widget _rewardBox(MatchReward rw) {
+    final up = rw.levelAfter > rw.levelBefore;
+    final tier = tierOf(rw.levelAfter);
+    final gc = kGlowColors[tier];
+    final lines = <String>[
+      '+${(rw.gained + rw.bonus).toStringAsFixed(1)} نقطة',
+      for (final m in rw.missions) '✅ مهمة منجزة: $m',
+      for (final a in rw.achievements) '🏅 إنجاز جديد: $a',
+    ];
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0x22FFFFFF),
+        borderRadius: BorderRadius.circular(12),
+        border: up ? Border.all(color: gc, width: 2) : null,
+        boxShadow: up ? [BoxShadow(color: gc.withAlpha(150), blurRadius: 16)] : null,
+      ),
+      child: Column(
+        children: [
+          if (up) ...[
+            const Text('⬆️ ارتقيت!',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold)),
+            Text('المستوى ${rw.levelAfter} — ${kTitles[tier]}',
+                style: TextStyle(
+                    color: gc, fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+          ],
+          for (final l in lines)
+            Text(l, style: const TextStyle(color: Colors.white, fontSize: 13)),
         ],
       ),
     );

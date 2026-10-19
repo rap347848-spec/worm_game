@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'config.dart';
-import 'engine.dart';
-import 'game_screen.dart';
+import 'lobby_screens.dart';
+import 'models.dart';
+import 'profile_screen.dart';
+import 'progress.dart';
+import 'settings_screen.dart';
 
 class MenuScreen extends StatefulWidget {
   const MenuScreen({super.key});
@@ -11,44 +14,166 @@ class MenuScreen extends StatefulWidget {
 }
 
 class _MenuScreenState extends State<MenuScreen> {
-  double _bots = 3;
-  Difficulty _diff = Difficulty.medium;
-
-  void _start() {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) =>
-          GameScreen(bots: _bots.round(), difficulty: _diff),
-    ));
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _firstRun());
   }
 
-  void _howTo() {
-    showDialog(
+  Future<void> _firstRun() async {
+    final p = Store.i.profile;
+    if (p.name.isEmpty) await _askName();
+    if (!mounted) return;
+    if (!p.tutorialSeen) {
+      await _howTo();
+      p.tutorialSeen = true;
+      Store.i.saveProfile();
+    }
+    final r = Store.i.claimDaily();
+    if (r > 0 && mounted) {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('🎁 مكافأة الدخول اليومي'),
+          content: Text(
+              '+${r.toStringAsFixed(1)} نقطة\nأيام متتالية: ${p.loginStreak}\n(كل يوم متتالٍ يزيد المكافأة حتى 7 أيام)'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('رائع')),
+          ],
+        ),
+      );
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _askName() async {
+    final ctrl = TextEditingController();
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('اختر اسم لاعبك'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: ctrl,
+                maxLength: 12,
+                autofocus: true,
+                onChanged: (_) => setS(() {}),
+                decoration: const InputDecoration(hintText: 'اسمك في اللعبة'),
+              ),
+              const Text('الاسم يبقى ثابتاً في كل مرة تدخل فيها اللعبة.',
+                  style: TextStyle(fontSize: 12)),
+            ],
+          ),
+          actions: [
+            FilledButton(
+              onPressed: ctrl.text.trim().isEmpty
+                  ? null
+                  : () {
+                      Store.i.profile.name = ctrl.text.trim();
+                      Store.i.saveProfile();
+                      Navigator.pop(ctx);
+                    },
+              child: const Text('حفظ'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _howTo() {
+    return showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('كيف تلعب'),
         content: SingleChildScrollView(
           child: Text(
             '• المس أي مكان بالشاشة وحرّك إصبعك: الدودة تتجه حسب حركة إصبعك.\n'
-            '• اضغط ضغطتين سريعتين: تسريع لمدة ${Cfg.boostDuration.round()} ثوانٍ، '
-            'ثم انتظار ${Cfg.boostCooldown.round()} ثوانٍ قبل التسريع التالي.\n'
-            '• كُل الفواكه لتكبر دودتك.\n'
-            '• إذا لمس رأسك جدار الساحة أو جسم دودة أخرى تموت.\n'
-            '• الدودة التي تموت تتحول إلى فواكه.\n'
-            '• تفوز عندما تقتل ${Cfg.killsToWin} دودات، وتخرج بعد ${Cfg.maxDeaths} موتات.\n'
-            '• يمكنك سحب الخريطة المصغرة ولوحة الترتيب لأي مكان.',
+            '• ضغطتان سريعتان: تسريع ${Cfg.boostDuration.round()} ثوانٍ، ثم انتظار ${Cfg.boostCooldown.round()} ثوانٍ.\n'
+            '• كُل الفواكه لتكبر. الفاكهة الذهبية تعطي نمواً أكبر.\n'
+            '• القدرات: 🛡️ درع يحميك من موت واحد، 🧲 مغناطيس يجذب الفواكه، ❄️ تجميد يبطّئ من حولك.\n'
+            '• إذا لمس رأسك الجدار أو جسم دودة أخرى تموت وتتحول إلى فواكه.\n'
+            '• تفوز بقتل ${10} دودات، وتخرج بعد ${10} موتات.\n'
+            '• اسحب الخريطة المصغرة ولوحة الترتيب لأي مكان.\n'
+            '• كل فوز يرفع مستواك: 100 مستوى وألقاب وألوان توهج تتغير كل 10 مستويات.',
             style: const TextStyle(height: 1.6),
           ),
         ),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('حسناً')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('حسناً')),
         ],
+      ),
+    );
+  }
+
+  Future<void> _go(Widget page) async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+    if (mounted) setState(() {});
+  }
+
+  void _multi() {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.wifi_tethering),
+              title: const Text('استضافة غرفة'),
+              subtitle: const Text('افتح غرفة ليدخلها أصدقاؤك (بلوتوث / واي فاي)'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _go(const HostLobbyScreen());
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.search),
+              title: const Text('الانضمام لغرفة'),
+              subtitle: const Text('ابحث عن غرفة قريبة منك'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _go(const JoinScreen());
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final p = Store.i.profile;
+    final lv = p.level;
+    final tier = tierOf(lv);
+    final gc = kGlowColors[tier];
+
+    Widget btn(String text, IconData icon, VoidCallback f, {bool main = false}) =>
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: main
+              ? FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14)),
+                  onPressed: f,
+                  icon: Icon(icon),
+                  label: Text(text, style: const TextStyle(fontSize: 18)),
+                )
+              : OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12)),
+                  onPressed: f,
+                  icon: Icon(icon),
+                  label: Text(text),
+                ),
+        );
+
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -72,61 +197,51 @@ class _MenuScreenState extends State<MenuScreen> {
                         textAlign: TextAlign.center,
                         style: TextStyle(
                             color: Colors.white,
-                            fontSize: 32,
+                            fontSize: 30,
                             fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 18),
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
+                    const SizedBox(height: 14),
+                    GestureDetector(
+                      onTap: () => _go(const ProfileScreen()),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
                           color: const Color(0x33FFFFFF),
-                          borderRadius: BorderRadius.circular(16)),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('عدد البوتات: ${_bots.round()}',
-                              style: const TextStyle(
-                                  color: Colors.white, fontSize: 16)),
-                          Slider(
-                            value: _bots,
-                            min: 1,
-                            max: 10,
-                            divisions: 9,
-                            label: '${_bots.round()}',
-                            onChanged: (v) => setState(() => _bots = v),
-                          ),
-                          const SizedBox(height: 6),
-                          const Text('مستوى صعوبة البوتات',
-                              style:
-                                  TextStyle(color: Colors.white, fontSize: 16)),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 8,
-                            children: [
-                              _chip('سهل', Difficulty.easy),
-                              _chip('متوسط', Difficulty.medium),
-                              _chip('صعب', Difficulty.hard),
-                            ],
-                          ),
-                        ],
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: gc, width: 2),
+                          boxShadow: [
+                            BoxShadow(color: gc.withAlpha(120), blurRadius: 12)
+                          ],
+                        ),
+                        child: Column(
+                          children: [
+                            Text(p.name.isEmpty ? '...' : p.name,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold)),
+                            Text('${kTitles[tier]} · المستوى $lv · ${p.wins} فوز',
+                                style: TextStyle(
+                                    color: gc, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 8),
+                            LinearProgressIndicator(
+                                value: levelProgress(p.points),
+                                minHeight: 6,
+                                color: gc),
+                          ],
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 18),
-                    FilledButton(
-                      style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 14)),
-                      onPressed: _start,
-                      child:
-                          const Text('ابدأ اللعب', style: TextStyle(fontSize: 18)),
-                    ),
-                    const SizedBox(height: 8),
-                    OutlinedButton(
-                        onPressed: _howTo, child: const Text('كيف تلعب؟')),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'اللعب مع أصدقاء عبر البلوتوث والواي فاي قادم في المرحلة الثالثة',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white60, fontSize: 12),
-                    ),
+                    const SizedBox(height: 16),
+                    btn('لعب فردي ضد البوتات', Icons.person,
+                        () => _go(const SoloSetupScreen()),
+                        main: true),
+                    btn('لعب جماعي (بلوتوث / واي فاي)', Icons.groups, _multi,
+                        main: true),
+                    btn('الملف الشخصي والإنجازات', Icons.emoji_events,
+                        () => _go(const ProfileScreen())),
+                    btn('الإعدادات', Icons.settings,
+                        () => _go(const SettingsScreen())),
+                    btn('كيف تلعب؟', Icons.help_outline, _howTo),
                   ],
                 ),
               ),
@@ -134,14 +249,6 @@ class _MenuScreenState extends State<MenuScreen> {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _chip(String text, Difficulty d) {
-    return ChoiceChip(
-      label: Text(text),
-      selected: _diff == d,
-      onSelected: (_) => setState(() => _diff = d),
     );
   }
 }

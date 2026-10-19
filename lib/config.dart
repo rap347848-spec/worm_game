@@ -22,17 +22,27 @@ class Cfg {
   // الفواكه
   static const int fruitCount = 100;
   static const double fruitRadius = 1.1;
+  static const double goldenValue = 3.0; // الفاكهة الذهبية
 
   // قواعد المباراة
-  static const int killsToWin = 10;
-  static const int maxDeaths = 10;
   static const double respawnDelay = 2.0;
   static const double invincibleTime = 3.0;
+  static const int maxWorms = 11;
 
   // التسريع (ضغطتان على الشاشة)
   static const double boostMult = 1.8;
   static const double boostDuration = 5.0;
   static const double boostCooldown = 10.0;
+
+  // القدرات المؤقتة
+  static const double shieldTime = 5.0;
+  static const double magnetTime = 8.0;
+  static const double freezeTime = 3.0;
+  static const double freezeRadius = 22.0;
+  static const double freezeSlow = 0.5;
+  static const double magnetRadius = 12.0;
+  static const double magnetPull = 16.0;
+  static const int maxPowerUps = 3;
 
   // الكاميرا: الارتفاع الظاهر من الساحة (سم)
   static const double viewHeight = 38.0;
@@ -40,4 +50,7 @@ class Cfg {
   // سرعة الدوران (راديان / ثانية) والمسافة بين نقاط جسم الدودة
   static const double turnRate = 4.5;
   static const double spacing = 0.5;
+
+  // الشبكة: عدد اللقطات المرسلة في الثانية من المضيف
+  static const double snapshotHz = 20.0;
 }
