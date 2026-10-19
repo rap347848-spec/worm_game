@@ -242,16 +242,20 @@ class Store {
   static final Store i = Store._();
   Store._();
 
-  late SharedPreferences _sp;
+  SharedPreferences? _sp;
   Profile profile = Profile();
   Settings settings = Settings();
 
   static const String _key = 'worm-game-local-key-v1-7c3f19';
 
   Future<void> init() async {
-    _sp = await SharedPreferences.getInstance();
-    final j = _sp.getString('p');
-    final s = _sp.getString('ps');
+    try {
+      _sp = await SharedPreferences.getInstance();
+    } catch (_) {
+      _sp = null;
+    }
+    final j = _sp?.getString('p');
+    final s = _sp?.getString('ps');
     if (j != null && s == _sig(j)) {
       try {
         profile = Profile.fromJson(
@@ -260,7 +264,7 @@ class Store {
         profile = Profile();
       }
     }
-    final st = _sp.getString('settings');
+    final st = _sp?.getString('settings');
     if (st != null) {
       try {
         settings = Settings.fromJson(jsonDecode(st) as Map<String, dynamic>);
@@ -279,12 +283,12 @@ class Store {
 
   void saveProfile() {
     final j = base64.encode(utf8.encode(jsonEncode(profile.toJson())));
-    _sp.setString('p', j);
-    _sp.setString('ps', _sig(j));
+    _sp?.setString('p', j);
+    _sp?.setString('ps', _sig(j));
   }
 
   void saveSettings() {
-    _sp.setString('settings', jsonEncode(settings.toJson()));
+    _sp?.setString('settings', jsonEncode(settings.toJson()));
   }
 
   /// مكافأة الدخول اليومي (تزيد مع الأيام المتتالية). ترجع 0 إذا أخذها اليوم.

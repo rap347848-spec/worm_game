@@ -1,34 +1,36 @@
 import 'package:audioplayers/audioplayers.dart';
 
-/// أصوات ناعمة وخفيفة: أكل، قتل، موت، رفع مستوى، قدرة.
+/// أصوات ناعمة وخفيفة. لا نهيّئ شيئاً عند تشغيل التطبيق (حتى لا يعلق)،
+/// وتُنشأ المشغّلات عند أول استخدام، وأي عطل في الصوت لا يوقف اللعبة.
 class Sfx {
   static final Sfx i = Sfx._();
   Sfx._();
 
   final Map<String, AudioPlayer> _p = {};
-  bool _ready = false;
+  bool disabled = false;
+  int _fails = 0;
 
-  Future<void> init() async {
-    try {
-      for (final n in ['eat', 'eat2', 'kill', 'death', 'level', 'power']) {
-        final p = AudioPlayer();
-        await p.setReleaseMode(ReleaseMode.stop);
-        await p.setPlayerMode(PlayerMode.lowLatency);
-        _p[n] = p;
-      }
-      _ready = true;
-    } catch (_) {
-      _ready = false;
-    }
+  Future<void> init() async {}
+
+  void play(String name) {
+    if (disabled) return;
+    _play(name);
   }
 
-  Future<void> play(String name) async {
-    if (!_ready) return;
+  Future<void> _play(String name) async {
     try {
-      final p = _p[name];
-      if (p == null) return;
-      await p.stop();
-      await p.play(AssetSource('sfx/$name.wav'));
-    } catch (_) {}
+      var p = _p[name];
+      if (p == null) {
+        p = AudioPlayer();
+        _p[name] = p;
+      }
+      await p
+          .play(AssetSource('sfx/$name.wav'))
+          .timeout(const Duration(seconds: 2));
+      _fails = 0;
+    } catch (_) {
+      _fails++;
+      if (_fails > 5) disabled = true;
+    }
   }
 }

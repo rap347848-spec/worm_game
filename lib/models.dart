@@ -100,13 +100,14 @@ class Worm {
   int get tier => tierOf(level);
   String get title => kTitles[tier];
 
-  double get length => math.min(
-      Cfg.baseLength * (1 + Cfg.lengthGrowth * eaten),
-      Cfg.baseLength * Cfg.maxLengthMult);
+  double get _lenMult => math.min(
+      math.pow(1 + Cfg.lengthGrowth, eaten).toDouble(), Cfg.maxLengthMult);
 
-  double get width => math.min(
-      Cfg.baseWidth * (1 + Cfg.widthGrowth * eaten),
-      Cfg.baseWidth * Cfg.maxWidthMult);
+  double get length => Cfg.baseLength * _lenMult;
+
+  double get width =>
+      Cfg.baseWidth *
+      math.min(1 + Cfg.widthFollow * (_lenMult - 1), Cfg.maxWidthMult);
 
   bool get boosting => boostTimer > 0;
 

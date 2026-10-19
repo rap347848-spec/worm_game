@@ -14,10 +14,12 @@ class Cfg {
   static const double baseWidth = 2.0;
 
   // النمو عند أكل فاكهة (نسبة من الحجم الأصلي)
-  static const double lengthGrowth = 0.02; // 2% للطول
-  static const double widthGrowth = 0.005; // 0.5% للعرض (كي يكون ملحوظاً)
-  static const double maxLengthMult = 14.0;
-  static const double maxWidthMult = 2.0;
+  // الطول: يزداد 2% من طول الدودة الحالي مع كل فاكهة (تراكمي، فيظهر النمو بوضوح)
+  static const double lengthGrowth = 0.02;
+  // العرض: يتبع الطول بنسبة معقولة (عند مضاعفة الطول يزيد العرض 30% فقط)
+  static const double widthFollow = 0.3;
+  static const double maxLengthMult = 14.0; // أقصى طول = 70 سم
+  static const double maxWidthMult = 2.2;
 
   // الفواكه
   static const int fruitCount = 100;
@@ -53,4 +55,8 @@ class Cfg {
 
   // الشبكة: عدد اللقطات المرسلة في الثانية من المضيف
   static const double snapshotHz = 20.0;
+
+  // حقوق التصميم
+  static const String credit = 'تصميم طلال قاسم';
+  static const String phone = '0599347848';
 }
