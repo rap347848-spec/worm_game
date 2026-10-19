@@ -36,6 +36,7 @@ jobs:
           add = ''.join('    <uses-permission android:name="android.permission.%s"/>\n' % x for x in perms)
           s = s.replace('<application', add + '    <application', 1)
           s = re.sub(r'android:label="[^"]*"', 'android:label="لعبة الدودة"', s)
+          s = re.sub(r'(<application[^>]*>)', r'\1\n        <meta-data android:name="io.flutter.embedding.android.EnableImpeller" android:value="false"/>', s, count=1)
           open(p, 'w', encoding='utf-8').write(s)
           PY
 
