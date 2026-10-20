@@ -32,7 +32,7 @@ jobs:
           import re
           p = 'android/app/src/main/AndroidManifest.xml'
           s = open(p, encoding='utf-8').read()
-          perms = ['ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION', 'BLUETOOTH', 'BLUETOOTH_ADMIN', 'BLUETOOTH_SCAN', 'BLUETOOTH_ADVERTISE', 'BLUETOOTH_CONNECT', 'ACCESS_WIFI_STATE', 'CHANGE_WIFI_STATE', 'NEARBY_WIFI_DEVICES', 'VIBRATE']
+          perms = ['ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION', 'BLUETOOTH', 'BLUETOOTH_ADMIN', 'BLUETOOTH_SCAN', 'BLUETOOTH_ADVERTISE', 'BLUETOOTH_CONNECT', 'ACCESS_WIFI_STATE', 'CHANGE_WIFI_STATE', 'NEARBY_WIFI_DEVICES', 'VIBRATE', 'INTERNET', 'ACCESS_NETWORK_STATE', 'CHANGE_WIFI_MULTICAST_STATE']
           add = ''.join('    <uses-permission android:name="android.permission.%s"/>\n' % x for x in perms)
           s = s.replace('<application', add + '    <application', 1)
           s = re.sub(r'android:label="[^"]*"', 'android:label="لعبة الدودة"', s)
@@ -47,6 +47,11 @@ jobs:
               sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/; s/minSdk flutter.minSdkVersion/minSdk 23/' "$f"
             fi
           done
+
+      - name: Use fixed signing key (keeps player name and level when updating the app)
+        run: |
+          mkdir -p ~/.android
+          cp ci/debug.keystore ~/.android/debug.keystore
 
       - run: flutter pub get
 
