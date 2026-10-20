@@ -53,6 +53,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Column(
                     children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                        child: Text(
+                          'حالة الحفظ: ${Store.i.prefsOk ? '✓' : '✗'} / ${Store.i.fileOk ? '✓' : '✗'} · مرات التشغيل: ${Store.i.launches}',
+                          style: const TextStyle(color: Colors.white54, fontSize: 11),
+                        ),
+                      ),
                       _sw('صوت الأكل', 'تشغيل أو كتم صوت الأكل لكل الدود', s.eatAll,
                           (v) => s.eatAll = v),
                       _sw('صوت أكل دودتي', 'يعمل فقط عند تشغيل صوت الأكل',

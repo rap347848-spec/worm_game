@@ -1,9 +1,90 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'models.dart';
 import 'progress.dart';
 
-class ProfileScreen extends StatelessWidget {
+/// نافذة استعادة الحساب من رمز نسخة احتياطية.
+Future<bool> showRestoreDialog(BuildContext context) async {
+  final ctrl = TextEditingController();
+  String? err;
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setS) => AlertDialog(
+        title: const Text('استعادة حسابك'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: ctrl,
+              maxLines: 3,
+              textDirection: TextDirection.ltr,
+              decoration:
+                  const InputDecoration(hintText: 'الصق رمز النسخة الاحتياطية هنا'),
+            ),
+            if (err != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(err!,
+                    style: const TextStyle(color: Colors.orangeAccent, fontSize: 12)),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('إلغاء')),
+          TextButton(
+            onPressed: () async {
+              final d = await Clipboard.getData('text/plain');
+              if (d?.text != null) {
+                ctrl.text = d!.text!;
+                setS(() {});
+              }
+            },
+            child: const Text('لصق'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final good = await Store.i.importCode(ctrl.text);
+              if (good) {
+                if (ctx.mounted) Navigator.pop(ctx, true);
+              } else {
+                setS(() => err = 'الرمز غير صحيح أو معدّل');
+              }
+            },
+            child: const Text('استعادة'),
+          ),
+        ],
+      ),
+    ),
+  );
+  return ok == true;
+}
+
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  Future<void> _backup() async {
+    await Clipboard.setData(ClipboardData(text: Store.i.exportCode()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('تم نسخ رمز النسخة الاحتياطية — احفظه في واتساب أو الملاحظات')));
+  }
+
+  Future<void> _restore() async {
+    final ok = await showRestoreDialog(context);
+    if (ok && mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('تمت استعادة حسابك ✅')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -107,6 +188,31 @@ class ProfileScreen extends StatelessWidget {
                         ],
                       ),
                     ),
+                    section('حفظ حسابك', [
+                      const Text(
+                          'بياناتك وإنجازاتك تُحفظ على هذا الهاتف تلقائياً. قبل حذف اللعبة أو تغيير الهاتف انسخ رمز النسخة الاحتياطية واحفظه، ثم استعده من هنا.',
+                          style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _backup,
+                              icon: const Icon(Icons.copy, size: 16),
+                              label: const Text('نسخ الرمز'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _restore,
+                              icon: const Icon(Icons.download, size: 16),
+                              label: const Text('استعادة'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ]),
                     section('إحصائياتك', [
                       stat('الانتصارات', '${p.wins}'),
                       stat('المباريات', '${p.matches}'),

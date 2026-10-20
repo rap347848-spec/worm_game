@@ -75,6 +75,14 @@ class _MenuScreenState extends State<MenuScreen> {
               TextButton(
                   onPressed: () => Navigator.pop(ctx),
                   child: const Text('إلغاء')),
+            if (!change)
+              TextButton(
+                onPressed: () async {
+                  final ok = await showRestoreDialog(ctx);
+                  if (ok && ctx.mounted) Navigator.pop(ctx);
+                },
+                child: const Text('لدي رمز نسخة احتياطية'),
+              ),
             FilledButton(
               onPressed: ctrl.text.trim().isEmpty
                   ? null

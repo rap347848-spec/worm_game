@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -253,23 +254,80 @@ class Store {
 
   static const String _key = 'worm-game-local-key-v1-7c3f19';
 
+  // حالة التخزين (للتشخيص في شاشة الإعدادات)
+  bool prefsOk = false;
+  bool fileOk = false;
+  int launches = 0;
+
+  // نسخة ثانية مستقلة داخل مجلد التطبيق الخاص (تعمل حتى لو تعطل SharedPreferences)
+  static const List<String> _dirs = [
+    '/data/user/0/com.wormgame.worm_game/files',
+    '/data/data/com.wormgame.worm_game/files',
+  ];
+  Directory? _dir;
+
+  Directory? _fileDir() {
+    if (_dir != null) return _dir;
+    for (final path in _dirs) {
+      try {
+        final d = Directory(path);
+        if (!d.existsSync()) d.createSync(recursive: true);
+        _dir = d;
+        return d;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  String? _readFile(String name) {
+    try {
+      final d = _fileDir();
+      if (d == null) return null;
+      final f = File('${d.path}/$name');
+      return f.existsSync() ? f.readAsStringSync() : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _writeFile(String name, String data) {
+    try {
+      final d = _fileDir();
+      if (d == null) return;
+      File('${d.path}/$name').writeAsStringSync(data, flush: true);
+    } catch (_) {}
+  }
+
+  bool _loadProfile(String j) {
+    try {
+      profile = Profile.fromJson(
+          jsonDecode(utf8.decode(base64.decode(j))) as Map<String, dynamic>);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> init() async {
     try {
       _sp = await SharedPreferences.getInstance();
     } catch (_) {
       _sp = null;
     }
+    prefsOk = _sp != null;
+    fileOk = _fileDir() != null;
+
+    bool loaded = false;
     final j = _sp?.getString('p');
     final s = _sp?.getString('ps');
-    if (j != null && s == _sig(j)) {
-      try {
-        profile = Profile.fromJson(
-            jsonDecode(utf8.decode(base64.decode(j))) as Map<String, dynamic>);
-      } catch (_) {
-        profile = Profile();
-      }
+    if (j != null && s == _sig(j)) loaded = _loadProfile(j);
+    if (!loaded) {
+      final fj = _readFile('p');
+      final fs = _readFile('ps');
+      if (fj != null && fs == _sig(fj)) loaded = _loadProfile(fj);
     }
-    final st = _sp?.getString('settings');
+
+    final st = _sp?.getString('settings') ?? _readFile('settings');
     if (st != null) {
       try {
         settings = Settings.fromJson(jsonDecode(st) as Map<String, dynamic>);
@@ -277,13 +335,21 @@ class Store {
         settings = Settings();
       }
     }
-    // نسخة احتياطية مستقلة للاسم: إذا تعذّر قراءة الملف الشخصي يبقى الاسم محفوظاً
+
+    // نسخة احتياطية مستقلة للاسم
     if (profile.name.isEmpty) {
-      final n = _sp?.getString('player_name');
+      final n = _sp?.getString('player_name') ?? _readFile('name');
       if (n != null && n.isNotEmpty) profile.name = n;
     }
+
+    launches = (int.tryParse(_sp?.getString('launches') ?? _readFile('launches') ?? '0') ?? 0) + 1;
+    _writeFile('launches', '$launches');
+    try {
+      await _sp?.setString('launches', '$launches');
+    } catch (_) {}
+
     profile.ensureDay(_day(DateTime.now()));
-    saveProfile();
+    await saveProfile();
   }
 
   String _sig(String s) =>
@@ -293,15 +359,49 @@ class Store {
 
   Future<void> saveProfile() async {
     final j = base64.encode(utf8.encode(jsonEncode(profile.toJson())));
-    await _sp?.setString('p', j);
-    await _sp?.setString('ps', _sig(j));
-    if (profile.name.isNotEmpty) {
-      await _sp?.setString('player_name', profile.name);
-    }
+    final sig = _sig(j);
+    _writeFile('p', j);
+    _writeFile('ps', sig);
+    if (profile.name.isNotEmpty) _writeFile('name', profile.name);
+    try {
+      await _sp?.setString('p', j);
+      await _sp?.setString('ps', sig);
+      if (profile.name.isNotEmpty) {
+        await _sp?.setString('player_name', profile.name);
+      }
+    } catch (_) {}
   }
 
   void saveSettings() {
-    _sp?.setString('settings', jsonEncode(settings.toJson()));
+    final s = jsonEncode(settings.toJson());
+    _writeFile('settings', s);
+    _sp?.setString('settings', s);
+  }
+
+  /// رمز نسخة احتياطية موقّع: احفظه (واتساب/ملاحظات) لاستعادة حسابك بعد حذف اللعبة.
+  String exportCode() {
+    final j = base64.encode(utf8.encode(jsonEncode(profile.toJson())));
+    return '$j.${_sig(j)}';
+  }
+
+  Future<bool> importCode(String raw) async {
+    try {
+      final code = raw.replaceAll(RegExp(r'\s'), '');
+      final i = code.lastIndexOf('.');
+      if (i <= 0) return false;
+      final j = code.substring(0, i);
+      final s = code.substring(i + 1);
+      if (s != _sig(j)) return false;
+      final prev = profile;
+      if (!_loadProfile(j)) {
+        profile = prev;
+        return false;
+      }
+      await saveProfile();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// مكافأة الدخول اليومي (تزيد مع الأيام المتتالية). ترجع 0 إذا أخذها اليوم.
