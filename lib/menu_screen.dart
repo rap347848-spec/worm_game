@@ -73,10 +73,10 @@ class _MenuScreenState extends State<MenuScreen> {
             FilledButton(
               onPressed: ctrl.text.trim().isEmpty
                   ? null
-                  : () {
+                  : () async {
                       Store.i.profile.name = ctrl.text.trim();
-                      Store.i.saveProfile();
-                      Navigator.pop(ctx);
+                      await Store.i.saveProfile();
+                      if (ctx.mounted) Navigator.pop(ctx);
                     },
               child: const Text('حفظ'),
             ),

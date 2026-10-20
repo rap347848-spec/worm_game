@@ -240,6 +240,7 @@ class _GameScreenState extends State<GameScreen>
         final multi = _engine.role != Role.solo;
 
         return Stack(
+          fit: StackFit.expand,
           children: [
             // طبقة اللعب (اللمس في أي مكان)
             Positioned.fill(
@@ -373,6 +374,19 @@ class _GameScreenState extends State<GameScreen>
 
             if (_paused && !_engine.over) _pauseOverlay(size),
             if (_lost) _lostOverlay(size),
+            Positioned(
+              bottom: 2,
+              right: 6,
+              child: IgnorePointer(
+                child: AnimatedBuilder(
+                  animation: _engine,
+                  builder: (_, __) => Text(
+                    'دودات ${_engine.worms.length} · فواكه ${_engine.fruits.length} · ث ${_engine.time.toStringAsFixed(0)}',
+                    style: const TextStyle(color: Colors.white54, fontSize: 10),
+                  ),
+                ),
+              ),
+            ),
             if (_err != null)
               Positioned(
                 top: 0,
@@ -490,7 +504,7 @@ class _GameScreenState extends State<GameScreen>
   }
 
   Widget _dialog(Size size, Widget child) {
-    return Positioned.fill(
+    return SizedBox.expand(
       child: Container(
         color: const Color(0xAA000000),
         alignment: Alignment.center,

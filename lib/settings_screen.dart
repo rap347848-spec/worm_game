@@ -63,6 +63,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           s.sfxOther, (v) => s.sfxOther = v),
                       _sw('الاهتزاز', 'اهتزاز خفيف عند القتل والموت', s.vibration,
                           (v) => s.vibration = v),
+                      _sw('رسم مبسط', 'يحل الشاشة السوداء على بعض الهواتف (بدون توهج وزخارف وأسماء)',
+                          s.simpleDraw, (v) => s.simpleDraw = v),
                       _sw('توفير البطارية', 'يقلل التوهج والمؤثرات للهواتف الضعيفة',
                           s.batterySaver, (v) => s.batterySaver = v),
                       Padding(

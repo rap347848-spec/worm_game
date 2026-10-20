@@ -210,6 +210,7 @@ class Settings {
   bool vibration = true;
   double sensitivity = 1.0;
   bool batterySaver = false;
+  bool simpleDraw = true; // رسم مبسط (آمن على كل الهواتف)
 
   Map<String, dynamic> toJson() => {
         'ea': eatAll,
@@ -219,6 +220,7 @@ class Settings {
         'vb': vibration,
         'se': sensitivity,
         'bs': batterySaver,
+        'sd': simpleDraw,
       };
 
   static Settings fromJson(Map<String, dynamic> j) {
@@ -230,6 +232,7 @@ class Settings {
     s.vibration = (j['vb'] ?? true) as bool;
     s.sensitivity = ((j['se'] ?? 1.0) as num).toDouble();
     s.batterySaver = (j['bs'] ?? false) as bool;
+    s.simpleDraw = (j['sd'] ?? true) as bool;
     return s;
   }
 }
@@ -272,6 +275,11 @@ class Store {
         settings = Settings();
       }
     }
+    // نسخة احتياطية مستقلة للاسم: إذا تعذّر قراءة الملف الشخصي يبقى الاسم محفوظاً
+    if (profile.name.isEmpty) {
+      final n = _sp?.getString('player_name');
+      if (n != null && n.isNotEmpty) profile.name = n;
+    }
     profile.ensureDay(_day(DateTime.now()));
     saveProfile();
   }
@@ -281,10 +289,13 @@ class Store {
 
   String _day(DateTime d) => '${d.year}-${d.month}-${d.day}';
 
-  void saveProfile() {
+  Future<void> saveProfile() async {
     final j = base64.encode(utf8.encode(jsonEncode(profile.toJson())));
-    _sp?.setString('p', j);
-    _sp?.setString('ps', _sig(j));
+    await _sp?.setString('p', j);
+    await _sp?.setString('ps', _sig(j));
+    if (profile.name.isNotEmpty) {
+      await _sp?.setString('player_name', profile.name);
+    }
   }
 
   void saveSettings() {

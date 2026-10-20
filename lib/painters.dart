@@ -50,6 +50,7 @@ class WorldPainter extends CustomPainter {
 
   void _paintWorld(Canvas canvas, Size size) {
     final lowFx = Store.i.settings.batterySaver;
+    final simple = Store.i.settings.simpleDraw;
     final scale = size.height / Cfg.viewHeight;
     final viewW = size.width / scale;
     const viewH = Cfg.viewHeight;
@@ -76,7 +77,7 @@ class WorldPainter extends CustomPainter {
         Paint()..color = const Color(0xFFB3E5FC));
 
     // شبكة خفيفة (تُلغى في وضع توفير البطارية)
-    if (!lowFx) {
+    if (!lowFx && !simple) {
       final grid = Paint()
         ..color = const Color(0x3390A4AE)
         ..strokeWidth = 0.12;
@@ -122,18 +123,18 @@ class WorldPainter extends CustomPainter {
     final fv = view.inflate(3);
     for (final f in engine.fruits) {
       if (!fv.contains(f.pos)) continue;
-      _drawFruit(canvas, f);
+      simple ? _drawFruitSimple(canvas, f) : _drawFruit(canvas, f);
     }
     for (final p in engine.powerUps) {
       if (!fv.contains(p.pos)) continue;
-      _drawPower(canvas, p);
+      simple ? _drawPowerSimple(canvas, p) : _drawPower(canvas, p);
     }
 
     // الدودات: الخصوم أولاً ثم اللاعب فوقهم
     for (final w in engine.worms) {
-      if (w.alive && !w.isPlayer) _drawWorm(canvas, w, lowFx);
+      if (w.alive && !w.isPlayer) _drawWorm(canvas, w, lowFx, simple);
     }
-    if (pl.alive) _drawWorm(canvas, pl, lowFx);
+    if (pl.alive) _drawWorm(canvas, pl, lowFx, simple);
 
     canvas.restore();
   }
@@ -265,7 +266,29 @@ class WorldPainter extends CustomPainter {
 
   // ---------------- الدودة ----------------
 
-  void _drawWorm(Canvas canvas, Worm w, bool lowFx) {
+  static const List<Color> _fruitCols = [
+    Color(0xFFE53935), Color(0xFFFFD54F), Color(0xFF7B1FA2),
+    Color(0xFFE91E63), Color(0xFFFB8C00), Color(0xFFFFC107),
+  ];
+
+  void _drawFruitSimple(Canvas c, Fruit f) {
+    c.drawCircle(f.pos, Cfg.fruitRadius * (f.type == 5 ? 1.3 : 1.0),
+        Paint()..color = _fruitCols[f.type.clamp(0, 5).toInt()]);
+  }
+
+  void _drawPowerSimple(Canvas c, PowerUp p) {
+    const cols = [Color(0xFFFFC107), Color(0xFFAB47BC), Color(0xFF4FC3F7)];
+    c.drawCircle(p.pos, 1.7, Paint()..color = const Color(0xE6FFFFFF));
+    c.drawCircle(
+        p.pos,
+        1.7,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.5
+          ..color = cols[p.type.clamp(0, 2).toInt()]);
+  }
+
+  void _drawWorm(Canvas canvas, Worm w, bool lowFx, bool simple) {
     final width = w.width;
     final ghost = w.invincible > 0;
     final tier = w.tier;
@@ -274,6 +297,44 @@ class WorldPainter extends CustomPainter {
     final path = Path()..moveTo(w.head.dx, w.head.dy);
     for (int i = w.trail.length - 1; i >= 0; i--) {
       path.lineTo(w.trail[i].dx, w.trail[i].dy);
+    }
+
+    if (simple) {
+      canvas.drawPath(
+          path,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = width + 0.7
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round
+            ..color = const Color(0xFF263238));
+      canvas.drawPath(
+          path,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = width
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round
+            ..color = w.color);
+      canvas.drawCircle(w.head, width * 0.62, Paint()..color = w.color);
+      final sd = Offset(math.cos(w.heading), math.sin(w.heading));
+      final sn = Offset(-sd.dy, sd.dx);
+      for (final k in const [1.0, -1.0]) {
+        final e = w.head + sd * (width * 0.25) + sn * (width * 0.28 * k);
+        canvas.drawCircle(e, width * 0.2, Paint()..color = const Color(0xFFFFFFFF));
+        canvas.drawCircle(e + sd * (width * 0.06), width * 0.1,
+            Paint()..color = const Color(0xFF000000));
+      }
+      if (w.invincible > 0) {
+        canvas.drawCircle(
+            w.head,
+            width * 1.3,
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 0.25
+              ..color = const Color(0xCCFFFFFF));
+      }
+      return;
     }
 
     // التوهج حول الدودة: لون وقوة حسب المستوى
