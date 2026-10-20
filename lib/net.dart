@@ -4,10 +4,60 @@ import 'package:flutter/foundation.dart';
 import 'package:nearby_connections/nearby_connections.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-/// اللعب عبر البلوتوث والواي فاي المباشر (Nearby Connections على أندرويد).
+/// غرفة بلوتوث: Nearby Connections (بلوتوث / BLE وقد ترفعه جوجل تلقائياً لاتصال أسرع).
+/// غرفة واي فاي: شبكة محلية مباشرة (lan.dart). الغرفتان منفصلتان تماماً.
 /// المضيف هو الذي يشغّل اللعبة، والباقي يرسلون حركة أصابعهم ويستقبلون الصورة.
 
 const String kService = 'com.wormgame.worms';
+
+class PeerInfo {
+  final String endpoint;
+  String name;
+  int level = 1;
+  bool connected = false;
+  bool hello = false;
+  PeerInfo(this.endpoint, this.name);
+}
+
+/// واجهة مشتركة للمضيف (بلوتوث أو واي فاي).
+abstract class HostLink {
+  final String name;
+  final int level;
+  VoidCallback? onChanged;
+  void Function(String peer, Map<String, dynamic> msg)? onMessage;
+  void Function(String peer)? onLeft;
+
+  HostLink(this.name, this.level);
+
+  /// عدد اللقطات في الثانية (البلوتوث أبطأ فيرسل أقل).
+  double get snapshotHz;
+  List<PeerInfo> get ready;
+  Future<bool> start();
+  void send(String id, Map<String, dynamic> m);
+  void broadcast(Map<String, dynamic> m);
+  void broadcastLobby();
+  void stop();
+}
+
+/// واجهة مشتركة للضيف.
+abstract class ClientLink {
+  final String name;
+  final int level;
+  final Map<String, String> hosts = {}; // معرف الغرفة -> اسم المضيف
+  String? hostId;
+  VoidCallback? onHostsChanged;
+  VoidCallback? onConnected;
+  VoidCallback? onDisconnected;
+  void Function(Map<String, dynamic> msg)? onMessage;
+
+  ClientLink(this.name, this.level);
+
+  bool get connected;
+  Future<bool> startDiscovery();
+  Future<void> connect(String id);
+  void send(Map<String, dynamic> m);
+  void stop();
+}
 
 Uint8List _enc(Map<String, dynamic> m) =>
     Uint8List.fromList(utf8.encode(jsonEncode(m)));
@@ -36,30 +86,24 @@ Future<bool> ensureNearbyPermissions() async {
   }
 }
 
-class PeerInfo {
-  final String endpoint;
-  String name;
-  int level = 1;
-  bool connected = false;
-  bool hello = false;
-  PeerInfo(this.endpoint, this.name);
-}
+// ============================================================
+// غرفة بلوتوث
+// ============================================================
 
-class NetHost {
-  final String name;
-  final int level;
+class NetHost extends HostLink {
   final Map<String, PeerInfo> peers = {};
   bool running = false;
 
-  VoidCallback? onChanged;
-  void Function(String peer, Map<String, dynamic> msg)? onMessage;
-  void Function(String peer)? onLeft;
+  NetHost(String name, int level) : super(name, level);
 
-  NetHost(this.name, this.level);
+  @override
+  double get snapshotHz => 10.0;
 
+  @override
   List<PeerInfo> get ready =>
       peers.values.where((p) => p.connected && p.hello).toList();
 
+  @override
   Future<bool> start() async {
     try {
       running = await Nearby().startAdvertising(
@@ -114,6 +158,7 @@ class NetHost {
     }
   }
 
+  @override
   void broadcastLobby() {
     broadcast({
       't': 'lobby',
@@ -124,12 +169,14 @@ class NetHost {
     });
   }
 
+  @override
   void send(String id, Map<String, dynamic> m) {
     try {
       Nearby().sendBytesPayload(id, _enc(m));
     } catch (_) {}
   }
 
+  @override
   void broadcast(Map<String, dynamic> m) {
     final bytes = _enc(m);
     for (final p in peers.values) {
@@ -140,6 +187,7 @@ class NetHost {
     }
   }
 
+  @override
   void stop() {
     try {
       Nearby().stopAdvertising();
@@ -149,21 +197,14 @@ class NetHost {
   }
 }
 
-class NetClient {
-  final String name;
-  final int level;
-  final Map<String, String> hosts = {}; // endpoint -> اسم المضيف
-  String? hostId;
+class NetClient extends ClientLink {
+  @override
   bool connected = false;
   bool discovering = false;
 
-  VoidCallback? onHostsChanged;
-  VoidCallback? onConnected;
-  VoidCallback? onDisconnected;
-  void Function(Map<String, dynamic> msg)? onMessage;
+  NetClient(String name, int level) : super(name, level);
 
-  NetClient(this.name, this.level);
-
+  @override
   Future<bool> startDiscovery() async {
     try {
       discovering = await Nearby().startDiscovery(
@@ -185,6 +226,7 @@ class NetClient {
     return discovering;
   }
 
+  @override
   Future<void> connect(String id) async {
     hostId = id;
     try {
@@ -223,6 +265,7 @@ class NetClient {
     }
   }
 
+  @override
   void send(Map<String, dynamic> m) {
     final id = hostId;
     if (id == null) return;
@@ -231,6 +274,7 @@ class NetClient {
     } catch (_) {}
   }
 
+  @override
   void stop() {
     try {
       Nearby().stopDiscovery();

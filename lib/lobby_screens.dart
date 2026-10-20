@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'config.dart';
 import 'engine.dart';
 import 'game_screen.dart';
+import 'lan.dart';
 import 'models.dart';
 import 'net.dart';
 import 'progress.dart';
@@ -172,11 +173,12 @@ class _SoloSetupScreenState extends State<SoloSetupScreen> {
 }
 
 // ============================================================
-// استضافة غرفة (بلوتوث / واي فاي)
+// استضافة غرفة: واي فاي (شبكة محلية) أو بلوتوث (منفصلتان)
 // ============================================================
 
 class HostLobbyScreen extends StatefulWidget {
-  const HostLobbyScreen({super.key});
+  final bool wifi;
+  const HostLobbyScreen({super.key, this.wifi = false});
 
   @override
   State<HostLobbyScreen> createState() => _HostLobbyScreenState();
@@ -184,7 +186,7 @@ class HostLobbyScreen extends StatefulWidget {
 
 class _HostLobbyScreenState extends State<HostLobbyScreen> {
   final MatchOptions _o = MatchOptions()..bots = 0;
-  NetHost? _host;
+  HostLink? _host;
   String? _error;
   bool _started = false;
   bool _ready = false;
@@ -197,14 +199,17 @@ class _HostLobbyScreenState extends State<HostLobbyScreen> {
 
   Future<void> _init() async {
     final p = Store.i.profile;
-    final ok = await ensureNearbyPermissions();
-    if (!mounted) return;
-    if (!ok) {
-      setState(() => _error =
-          'لم تُمنح الأذونات المطلوبة (الموقع والبلوتوث). فعّلها من إعدادات الهاتف ثم أعد المحاولة.');
-      return;
+    if (!widget.wifi) {
+      final ok = await ensureNearbyPermissions();
+      if (!mounted) return;
+      if (!ok) {
+        setState(() => _error =
+            'لم تُمنح الأذونات المطلوبة (الموقع والبلوتوث). فعّلها من إعدادات الهاتف ثم أعد المحاولة.');
+        return;
+      }
     }
-    final h = NetHost(p.name, p.level);
+    final HostLink h =
+        widget.wifi ? LanHost(p.name, p.level) : NetHost(p.name, p.level);
     h.onChanged = () {
       if (mounted) setState(() {});
     };
@@ -214,8 +219,9 @@ class _HostLobbyScreenState extends State<HostLobbyScreen> {
     setState(() {
       _ready = started;
       if (!started) {
-        _error =
-            'تعذّر بدء الاستضافة. تأكد من تشغيل البلوتوث وخدمة الموقع ثم أعد المحاولة.';
+        _error = widget.wifi
+            ? 'تعذّر فتح الغرفة. اتصل بشبكة واي فاي، أو شغّل نقطة الاتصال (Hotspot) ثم أعد المحاولة.'
+            : 'تعذّر بدء الاستضافة. تأكد من تشغيل البلوتوث وخدمة الموقع ثم أعد المحاولة.';
       }
     });
   }
@@ -264,9 +270,13 @@ class _HostLobbyScreenState extends State<HostLobbyScreen> {
     final p = Store.i.profile;
     final peers = _host?.ready ?? <PeerInfo>[];
     final maxBots = Cfg.maxWorms - 1 - peers.length;
+    final h = _host;
+    final ips = (h is LanHost) ? h.ips : <String>[];
 
     return Scaffold(
-      appBar: AppBar(title: const Text('استضافة غرفة'), backgroundColor: Colors.transparent),
+      appBar: AppBar(
+          title: Text(widget.wifi ? 'استضافة غرفة واي فاي' : 'استضافة غرفة بلوتوث'),
+          backgroundColor: Colors.transparent),
       extendBodyBehindAppBar: true,
       body: _bg(
         child: Center(
@@ -280,7 +290,8 @@ class _HostLobbyScreenState extends State<HostLobbyScreen> {
                     _card(
                       child: Column(
                         children: [
-                          Text(_error!, style: const TextStyle(color: Colors.orangeAccent)),
+                          Text(_error!,
+                              style: const TextStyle(color: Colors.orangeAccent)),
                           const SizedBox(height: 8),
                           OutlinedButton(
                               onPressed: () {
@@ -298,9 +309,16 @@ class _HostLobbyScreenState extends State<HostLobbyScreen> {
                         children: [
                           Text(
                               _ready
-                                  ? 'الغرفة مفتوحة باسم "${p.name}" — اطلب من أصدقائك اختيار "الانضمام لغرفة"'
+                                  ? 'الغرفة مفتوحة باسم "${p.name}" — اطلب من أصدقائك "الانضمام لغرفة ${widget.wifi ? 'واي فاي' : 'بلوتوث'}"'
                                   : 'جارٍ فتح الغرفة...',
                               style: const TextStyle(color: Colors.white70)),
+                          if (widget.wifi && ips.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Text('عنوان الغرفة: ${ips.join('  /  ')}',
+                                textDirection: TextDirection.ltr,
+                                style: const TextStyle(
+                                    color: Colors.white54, fontSize: 12)),
+                          ],
                           const SizedBox(height: 10),
                           Text('اللاعبون (${peers.length + 1})', style: _label),
                           const SizedBox(height: 4),
@@ -344,24 +362,26 @@ class _HostLobbyScreenState extends State<HostLobbyScreen> {
 }
 
 // ============================================================
-// الانضمام لغرفة
+// الانضمام لغرفة: واي فاي أو بلوتوث
 // ============================================================
 
 class JoinScreen extends StatefulWidget {
-  const JoinScreen({super.key});
+  final bool wifi;
+  const JoinScreen({super.key, this.wifi = false});
 
   @override
   State<JoinScreen> createState() => _JoinScreenState();
 }
 
 class _JoinScreenState extends State<JoinScreen> {
-  NetClient? _c;
+  ClientLink? _c;
   GameEngine? _eng;
   String? _error;
   String _status = 'جارٍ البحث عن غرف قريبة...';
   bool _connecting = false;
   bool _started = false;
   List<dynamic> _lobby = [];
+  final TextEditingController _ip = TextEditingController();
 
   @override
   void initState() {
@@ -371,14 +391,17 @@ class _JoinScreenState extends State<JoinScreen> {
 
   Future<void> _init() async {
     final p = Store.i.profile;
-    final ok = await ensureNearbyPermissions();
-    if (!mounted) return;
-    if (!ok) {
-      setState(() => _error =
-          'لم تُمنح الأذونات المطلوبة (الموقع والبلوتوث). فعّلها من إعدادات الهاتف ثم أعد المحاولة.');
-      return;
+    if (!widget.wifi) {
+      final ok = await ensureNearbyPermissions();
+      if (!mounted) return;
+      if (!ok) {
+        setState(() => _error =
+            'لم تُمنح الأذونات المطلوبة (الموقع والبلوتوث). فعّلها من إعدادات الهاتف ثم أعد المحاولة.');
+        return;
+      }
     }
-    final c = NetClient(p.name, p.level);
+    final ClientLink c =
+        widget.wifi ? LanClient(p.name, p.level) : NetClient(p.name, p.level);
     c.onHostsChanged = () {
       if (mounted) setState(() {});
     };
@@ -405,8 +428,9 @@ class _JoinScreenState extends State<JoinScreen> {
     if (!mounted) return;
     setState(() {
       if (!started) {
-        _error =
-            'تعذّر البحث عن الغرف. تأكد من تشغيل البلوتوث وخدمة الموقع ثم أعد المحاولة.';
+        _error = widget.wifi
+            ? 'تعذّر البحث عن الغرف. تأكد من الاتصال بنفس شبكة الواي فاي (أو نقطة اتصال المضيف).'
+            : 'تعذّر البحث عن الغرف. تأكد من تشغيل البلوتوث وخدمة الموقع ثم أعد المحاولة.';
       }
     });
   }
@@ -437,8 +461,17 @@ class _JoinScreenState extends State<JoinScreen> {
     }
   }
 
+  void _connect(String id) {
+    setState(() {
+      _connecting = true;
+      _status = 'جارٍ الاتصال...';
+    });
+    _c?.connect(id);
+  }
+
   @override
   void dispose() {
+    _ip.dispose();
     if (!_started) _c?.stop();
     super.dispose();
   }
@@ -450,7 +483,9 @@ class _JoinScreenState extends State<JoinScreen> {
     final connected = c?.connected ?? false;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('الانضمام لغرفة'), backgroundColor: Colors.transparent),
+      appBar: AppBar(
+          title: Text(widget.wifi ? 'الانضمام لغرفة واي فاي' : 'الانضمام لغرفة بلوتوث'),
+          backgroundColor: Colors.transparent),
       extendBodyBehindAppBar: true,
       body: _bg(
         child: Center(
@@ -462,7 +497,8 @@ class _JoinScreenState extends State<JoinScreen> {
                   ? _card(
                       child: Column(
                         children: [
-                          Text(_error!, style: const TextStyle(color: Colors.orangeAccent)),
+                          Text(_error!,
+                              style: const TextStyle(color: Colors.orangeAccent)),
                           const SizedBox(height: 8),
                           OutlinedButton(
                               onPressed: () {
@@ -501,28 +537,56 @@ class _JoinScreenState extends State<JoinScreen> {
                                 const SizedBox(height: 6),
                                 if (hosts.isEmpty)
                                   const Text(
-                                      'لا توجد غرف بعد. اطلب من المضيف فتح "استضافة غرفة".',
+                                      'لا توجد غرف بعد. اطلب من المضيف فتح "استضافة غرفة" من نفس النوع.',
                                       style: TextStyle(color: Colors.white60)),
                                 for (final h in hosts)
                                   ListTile(
+                                    dense: true,
                                     contentPadding: EdgeInsets.zero,
-                                    leading: const Icon(Icons.wifi_tethering,
+                                    leading: Icon(
+                                        widget.wifi
+                                            ? Icons.wifi
+                                            : Icons.bluetooth,
                                         color: Colors.white),
                                     title: Text('غرفة ${h.value}',
                                         style: const TextStyle(color: Colors.white)),
                                     trailing: FilledButton(
-                                      onPressed: _connecting
-                                          ? null
-                                          : () {
-                                              setState(() {
-                                                _connecting = true;
-                                                _status = 'جارٍ الاتصال...';
-                                              });
-                                              _c?.connect(h.key);
-                                            },
+                                      onPressed:
+                                          _connecting ? null : () => _connect(h.key),
                                       child: const Text('انضمام'),
                                     ),
                                   ),
+                                if (widget.wifi) ...[
+                                  const Divider(color: Colors.white24),
+                                  const Text('أو أدخل عنوان المضيف يدوياً',
+                                      style: TextStyle(
+                                          color: Colors.white70, fontSize: 12)),
+                                  const SizedBox(height: 6),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _ip,
+                                          keyboardType: TextInputType.number,
+                                          textDirection: TextDirection.ltr,
+                                          decoration: const InputDecoration(
+                                              isDense: true,
+                                              hintText: '192.168.1.5'),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      FilledButton(
+                                        onPressed: _connecting
+                                            ? null
+                                            : () {
+                                                final t = _ip.text.trim();
+                                                if (t.isNotEmpty) _connect(t);
+                                              },
+                                        child: const Text('اتصال'),
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ],
                             ),
                           ),

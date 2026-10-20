@@ -75,6 +75,13 @@ class Worm {
   double shield = 0;
   double magnet = 0;
   double freeze = 0;
+
+  // العميل فقط: آخر حالة وصلت من المضيف (للتنعيم والتوقع)
+  Offset srvHead = Offset.zero;
+  double srvHeading = 0;
+  double srvAt = 0;
+  bool hasSrv = false;
+
   String chat = '';
   double chatTimer = 0;
 

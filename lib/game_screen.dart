@@ -12,8 +12,8 @@ import 'sfx.dart';
 
 class GameScreen extends StatefulWidget {
   final GameEngine engine;
-  final NetHost? host;
-  final NetClient? client;
+  final HostLink? host;
+  final ClientLink? client;
   const GameScreen({super.key, required this.engine, this.host, this.client});
 
   @override
@@ -56,6 +56,7 @@ class _GameScreenState extends State<GameScreen>
 
     final host = widget.host;
     if (host != null) {
+      _engine.snapHz = host.snapshotHz;
       _engine.onSnapshot = (m) => host.broadcast(m);
       host.onMessage = (peer, m) {
         if (m['t'] == 'in' || m['t'] == 'chat') _engine.remoteInput(peer, m);
@@ -166,7 +167,7 @@ class _GameScreenState extends State<GameScreen>
 
   // ---------------- نهاية المباراة ----------------
 
-  void _finish() {
+  void _finish({bool surrender = false}) {
     _recordedRound = _engine.round;
     if (_engine.practice) return;
     final me = _engine.player;
@@ -175,20 +176,21 @@ class _GameScreenState extends State<GameScreen>
       if (w.human && !identical(w, me)) opp[w.name] = w.level;
     }
     final res = MatchResult(
-      won: _engine.winner != null && identical(_engine.winner, me),
+      won: !surrender && _engine.winner != null && identical(_engine.winner, me),
       kills: me.kills,
       deaths: me.deaths,
       fruits: _engine.myFruits,
       bestStreak: _engine.bestStreak,
       otherHumans: _engine.otherHumans,
       opponents: opp,
+      surrendered: surrender,
     );
     final rw = Store.i.recordMatch(res);
     if (rw.levelAfter > rw.levelBefore) {
       if (Store.i.settings.sfxOther) Sfx.i.play('level');
       if (Store.i.settings.vibration) HapticFeedback.mediumImpact();
     }
-    setState(() => _reward = rw);
+    if (!surrender && mounted) setState(() => _reward = rw);
   }
 
   // ---------------- اللمس: توجيه + ضغطتان للتسريع ----------------
@@ -300,6 +302,32 @@ class _GameScreenState extends State<GameScreen>
                   decoration: const BoxDecoration(
                       color: Color(0x66000000), shape: BoxShape.circle),
                   child: const Icon(Icons.pause, color: Colors.white),
+                ),
+              ),
+            ),
+
+            // زر الاستسلام (داخل الساحة)
+            Positioned(
+              top: 6,
+              left: size.width / 2 + 30,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _confirmSurrender,
+                child: Container(
+                  height: 36,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                      color: const Color(0x99000000),
+                      borderRadius: BorderRadius.circular(18)),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.flag, color: Colors.white, size: 16),
+                      SizedBox(width: 4),
+                      Text('استسلام',
+                          style: TextStyle(color: Colors.white, fontSize: 12)),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -523,6 +551,36 @@ class _GameScreenState extends State<GameScreen>
 
   void _toMenu() => Navigator.of(context).popUntil((r) => r.isFirst);
 
+  /// استسلام: يُحسب خسارة ثم يعود للقائمة الرئيسية.
+  Future<void> _confirmSurrender() async {
+    final wasPaused = _paused;
+    if (_engine.role == Role.solo) setState(() => _paused = true);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('استسلام'),
+        content: const Text('هل تريد الاستسلام والعودة إلى القائمة الرئيسية؟'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('لا')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('نعم، استسلم')),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (ok == true) {
+      if (!_engine.over && _recordedRound != _engine.round) {
+        _finish(surrender: true);
+      }
+      _toMenu();
+    } else if (!wasPaused) {
+      setState(() => _paused = false);
+    }
+  }
+
   Widget _pauseOverlay(Size size) {
     return _dialog(
       size,
@@ -554,6 +612,15 @@ class _GameScreenState extends State<GameScreen>
             child: OutlinedButton(
               onPressed: _toMenu,
               child: const Text('القائمة الرئيسية'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton.icon(
+              onPressed: () => SystemNavigator.pop(),
+              icon: const Icon(Icons.exit_to_app, size: 18),
+              label: const Text('خروج من اللعبة'),
             ),
           ),
         ],

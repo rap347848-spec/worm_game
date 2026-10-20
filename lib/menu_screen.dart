@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'config.dart';
 import 'lobby_screens.dart';
 import 'models.dart';
@@ -47,14 +48,14 @@ class _MenuScreenState extends State<MenuScreen> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _askName() async {
-    final ctrl = TextEditingController();
+  Future<void> _askName({bool change = false}) async {
+    final ctrl = TextEditingController(text: change ? Store.i.profile.name : '');
     await showDialog(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: change,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => AlertDialog(
-          title: const Text('اختر اسم لاعبك'),
+          title: Text(change ? 'تغيير الاسم' : 'اختر اسم لاعبك'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -65,11 +66,15 @@ class _MenuScreenState extends State<MenuScreen> {
                 onChanged: (_) => setS(() {}),
                 decoration: const InputDecoration(hintText: 'اسمك في اللعبة'),
               ),
-              const Text('الاسم يبقى ثابتاً في كل مرة تدخل فيها اللعبة.',
+              const Text('يُحفظ اسمك ولا يُطلب منك كل مرة، ويمكنك تغييره من أيقونة القلم.',
                   style: TextStyle(fontSize: 12)),
             ],
           ),
           actions: [
+            if (change)
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('إلغاء')),
             FilledButton(
               onPressed: ctrl.text.trim().isEmpty
                   ? null
@@ -117,6 +122,17 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   void _multi() {
+    Widget tile(IconData icon, String title, String sub, Widget page) =>
+        ListTile(
+          dense: true,
+          leading: Icon(icon),
+          title: Text(title),
+          subtitle: Text(sub, style: const TextStyle(fontSize: 11)),
+          onTap: () {
+            Navigator.pop(context);
+            _go(page);
+          },
+        );
     showModalBottomSheet(
       context: context,
       constraints: const BoxConstraints(maxWidth: 420),
@@ -125,29 +141,43 @@ class _MenuScreenState extends State<MenuScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ListTile(
-                dense: true,
-                leading: const Icon(Icons.wifi_tethering),
-                title: const Text('استضافة غرفة'),
-                subtitle: const Text('افتح غرفة ليدخلها أصدقاؤك'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _go(const HostLobbyScreen());
-                },
+              const Padding(
+                padding: EdgeInsets.only(top: 10),
+                child: Text('غرفة واي فاي (سريعة وثابتة)',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
               ),
-              ListTile(
-                dense: true,
-                leading: const Icon(Icons.search),
-                title: const Text('الانضمام لغرفة'),
-                subtitle: const Text('ابحث عن غرفة قريبة منك'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _go(const JoinScreen());
-                },
+              tile(Icons.wifi, 'استضافة غرفة واي فاي',
+                  'نفس الشبكة أو نقطة اتصال هاتفك', const HostLobbyScreen(wifi: true)),
+              tile(Icons.wifi_find, 'الانضمام لغرفة واي فاي',
+                  'ابحث عن غرف على نفس الشبكة', const JoinScreen(wifi: true)),
+              const Divider(),
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text('غرفة بلوتوث (بدون إنترنت)',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
               ),
+              tile(Icons.bluetooth, 'استضافة غرفة بلوتوث',
+                  'افتح غرفة ليدخلها أصدقاؤك', const HostLobbyScreen()),
+              tile(Icons.bluetooth_searching, 'الانضمام لغرفة بلوتوث',
+                  'ابحث عن غرفة قريبة منك', const JoinScreen()),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  void _exit() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('خروج من اللعبة'),
+        content: const Text('هل تريد إغلاق اللعبة؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('لا')),
+          FilledButton(
+              onPressed: () => SystemNavigator.pop(), child: const Text('نعم، خروج')),
+        ],
       ),
     );
   }
@@ -184,9 +214,24 @@ class _MenuScreenState extends State<MenuScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(p.name.isEmpty ? '...' : p.name,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(p.name.isEmpty ? '...' : p.name,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold)),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () async {
+                    await _askName(change: true);
+                    if (mounted) setState(() {});
+                  },
+                  child: const Icon(Icons.edit, size: 16, color: Colors.white70),
+                ),
+              ],
+            ),
             Text('${kTitles[tier]} · المستوى $lv · ${p.wins} فوز',
                 style: TextStyle(color: gc, fontSize: 12, fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
@@ -228,11 +273,12 @@ class _MenuScreenState extends State<MenuScreen> {
       children: [
         _btn('لعب فردي ضد البوتات', Icons.person, () => _go(const SoloSetupScreen()),
             main: true),
-        _btn('لعب جماعي (بلوتوث / واي فاي)', Icons.groups, _multi, main: true),
+        _btn('لعب جماعي (واي فاي / بلوتوث)', Icons.groups, _multi, main: true),
         _btn('الملف الشخصي والإنجازات', Icons.emoji_events,
             () => _go(const ProfileScreen())),
         _btn('الإعدادات', Icons.settings, () => _go(const SettingsScreen())),
         _btn('كيف تلعب؟', Icons.help_outline, _howTo),
+        _btn('خروج من اللعبة', Icons.exit_to_app, _exit),
       ],
     );
 

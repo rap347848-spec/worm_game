@@ -121,6 +121,8 @@ class GameEngine extends ChangeNotifier {
 
   final List<List<dynamic>> _pending = <List<dynamic>>[];
   double _snapAcc = 0;
+  double _fruitAcc = 99;
+  double snapHz = Cfg.snapshotHz;
   double _powerTimer = 8;
   double _goldTimer = 15;
   double _lastSendT = -1;
@@ -331,6 +333,7 @@ class GameEngine extends ChangeNotifier {
     }
     _powerTimer = 8;
     _goldTimer = 15;
+    _fruitAcc = 99;
     notifyListeners();
   }
 
@@ -342,6 +345,7 @@ class GameEngine extends ChangeNotifier {
       if (w.chatTimer > 0) w.chatTimer -= dt;
     }
     if (role == Role.client) {
+      _clientSmooth(dt);
       _updateCamera(dt);
       notifyListeners();
       return;
@@ -405,7 +409,8 @@ class GameEngine extends ChangeNotifier {
 
     if (role == Role.host && onSnapshot != null) {
       _snapAcc += dt;
-      if (_snapAcc >= 1.0 / Cfg.snapshotHz) {
+      _fruitAcc += dt;
+      if (_snapAcc >= 1.0 / snapHz) {
         _snapAcc = 0;
         onSnapshot!(snapshot());
         _pending.clear();
@@ -803,17 +808,28 @@ class GameEngine extends ChangeNotifier {
     return true;
   }
 
-  // ---------------- الشبكة: لقطة المضيف ----------------
+  // ---------------- الشبكة: لقطة المضيف (خفيفة) ----------------
 
   int _q(double v) => (v * 10).round();
 
   Map<String, dynamic> snapshot() {
+    final withFruit = _fruitAcc >= 0.5;
+    if (withFruit) _fruitAcc = 0;
+
     final ws = <List<dynamic>>[];
     for (final w in worms) {
+      // نقطة كل 1.5 سم فقط (الأحدث أولاً) لتقليل حجم البيانات
       final tr = <int>[];
-      for (int i = w.trail.length - 1; i >= 0; i -= 2) {
+      int i = w.trail.length - 1;
+      int lastI = i;
+      for (; i >= 0; i -= 3) {
         tr.add(_q(w.trail[i].dx));
         tr.add(_q(w.trail[i].dy));
+        lastI = i;
+      }
+      if (lastI != 0 && w.trail.isNotEmpty) {
+        tr.add(_q(w.trail[0].dx));
+        tr.add(_q(w.trail[0].dy));
       }
       ws.add([
         w.id,
@@ -840,21 +856,32 @@ class GameEngine extends ChangeNotifier {
         ch.add([w.id, kChat.indexOf(w.chat), _q(w.chatTimer)]);
       }
     }
-    return {
+    final m = <String, dynamic>{
       't': 'snap',
       'r': round,
       'o': over ? 1 : 0,
       'w': winner?.id ?? -1,
       'ws': ws,
-      'f': [
-        for (final f in fruits) [_q(f.pos.dx), _q(f.pos.dy), f.type]
-      ],
-      'p': [
-        for (final p in powerUps) [_q(p.pos.dx), _q(p.pos.dy), p.type]
-      ],
       'ch': ch,
       'ev': List<List<dynamic>>.from(_pending),
     };
+    if (withFruit) {
+      final f = <int>[];
+      for (final x in fruits) {
+        f.add(_q(x.pos.dx));
+        f.add(_q(x.pos.dy));
+        f.add(x.type);
+      }
+      final p = <int>[];
+      for (final x in powerUps) {
+        p.add(_q(x.pos.dx));
+        p.add(_q(x.pos.dy));
+        p.add(x.type);
+      }
+      m['f'] = f;
+      m['p'] = p;
+    }
+    return m;
   }
 
   // ---------------- الشبكة: العميل ----------------
@@ -884,6 +911,32 @@ class GameEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _removeNearestFruit(Offset p) {
+    int bi = -1;
+    double bd = 4.0;
+    for (int i = 0; i < fruits.length; i++) {
+      final d = (fruits[i].pos - p).distance;
+      if (d < bd) {
+        bd = d;
+        bi = i;
+      }
+    }
+    if (bi >= 0) fruits.removeAt(bi);
+  }
+
+  void _removeNearestPower(Offset p) {
+    int bi = -1;
+    double bd = 4.0;
+    for (int i = 0; i < powerUps.length; i++) {
+      final d = (powerUps[i].pos - p).distance;
+      if (d < bd) {
+        bd = d;
+        bi = i;
+      }
+    }
+    if (bi >= 0) powerUps.removeAt(bi);
+  }
+
   void applySnapshot(Map<String, dynamic> m) {
     if (worms.isEmpty) return;
     final r = (m['r'] as num).toInt();
@@ -903,8 +956,8 @@ class GameEngine extends ChangeNotifier {
       final w = _byId((e[0] as num).toInt());
       if (w == null) continue;
       final wasAlive = w.alive;
-      w.head = Offset(d(e[1]), d(e[2]));
-      w.heading = (e[3] as num) / 100.0;
+      final sh = Offset(d(e[1]), d(e[2]));
+      final hd = (e[3] as num) / 100.0;
       final fl = (e[4] as num).toInt();
       w.alive = (fl & 1) != 0;
       w.eliminated = (fl & 2) != 0;
@@ -923,18 +976,36 @@ class GameEngine extends ChangeNotifier {
       for (int i = tr.length - 2; i >= 0; i -= 2) {
         w.trail.add(Offset(d(tr[i]), d(tr[i + 1])));
       }
+      w.srvHead = sh;
+      w.srvHeading = hd;
+      w.srvAt = time;
+      if (!w.hasSrv || (w.alive && !wasAlive) || (w.head - sh).distance > 8) {
+        w.head = sh;
+        w.heading = hd;
+        w.target = hd;
+      }
+      w.hasSrv = true;
       if (w.isPlayer && wasAlive && !w.alive) lastDeathPos = w.head;
     }
 
-    fruits.clear();
-    for (final f in m['f'] as List) {
-      final type = (f[2] as num).toInt();
-      fruits.add(Fruit(Offset(d(f[0]), d(f[1])), type,
-          type == 5 ? Cfg.goldenValue : 1.0));
+    final f = m['f'];
+    if (f != null) {
+      fruits.clear();
+      final l = f as List;
+      for (int i = 0; i + 2 < l.length; i += 3) {
+        final type = (l[i + 2] as num).toInt();
+        fruits.add(Fruit(Offset(d(l[i]), d(l[i + 1])), type,
+            type == 5 ? Cfg.goldenValue : 1.0));
+      }
     }
-    powerUps.clear();
-    for (final p in m['p'] as List) {
-      powerUps.add(PowerUp(Offset(d(p[0]), d(p[1])), (p[2] as num).toInt()));
+    final pw = m['p'];
+    if (pw != null) {
+      powerUps.clear();
+      final l = pw as List;
+      for (int i = 0; i + 2 < l.length; i += 3) {
+        powerUps.add(PowerUp(
+            Offset(d(l[i]), d(l[i + 1])), (l[i + 2] as num).toInt()));
+      }
     }
     for (final c in m['ch'] as List) {
       final w = _byId((c[0] as num).toInt());
@@ -947,10 +1018,39 @@ class GameEngine extends ChangeNotifier {
     for (final ev in m['ev'] as List) {
       final w = _byId((ev[1] as num).toInt());
       if (w == null) continue;
-      final o = (ev[2] as num).toInt() >= 0 ? _byId((ev[2] as num).toInt()) : null;
-      _track(ev[0] as String, w);
-      onEvent?.call(ev[0] as String, w, o);
+      final type = ev[0] as String;
+      final oid = (ev[2] as num).toInt();
+      final o = oid >= 0 ? _byId(oid) : null;
+      if (type == 'eat') _removeNearestFruit(w.srvHead);
+      if (type == 'power') _removeNearestPower(w.srvHead);
+      _track(type, w);
+      onEvent?.call(type, w, o);
     }
     notifyListeners();
+  }
+
+  /// تنعيم حركة الدودات عند الضيف بين اللقطات (توقع المسار + تصحيح تدريجي).
+  void _clientSmooth(double dt) {
+    for (final w in worms) {
+      if (!w.alive || !w.hasSrv) continue;
+      final sp = Cfg.speed *
+          (w.boosting ? Cfg.boostMult : 1.0) *
+          (w.freeze > 0 ? Cfg.freezeSlow : 1.0);
+      final age = math.min(0.25, time - w.srvAt);
+      final pred = w.srvHead +
+          Offset(math.cos(w.srvHeading), math.sin(w.srvHeading)) * (sp * age);
+      if (w.id == myId) {
+        // دودتي: أدور فوراً حسب إصبعي دون انتظار المضيف، ثم أصحح الموضع بهدوء
+        final diff = angDiff(w.target, w.heading);
+        final mt = Cfg.turnRate * dt;
+        w.heading += math.max(-mt, math.min(mt, diff));
+        w.head = w.head +
+            Offset(math.cos(w.heading), math.sin(w.heading)) * (sp * dt);
+        w.head = w.head + (pred - w.head) * math.min(1.0, dt * 6);
+      } else {
+        w.head = w.head + (pred - w.head) * math.min(1.0, dt * 14);
+        w.heading += angDiff(w.srvHeading, w.heading) * math.min(1.0, dt * 14);
+      }
+    }
   }
 }

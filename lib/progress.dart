@@ -44,6 +44,7 @@ class MatchResult {
   final int bestStreak;
   final int otherHumans;
   final Map<String, int> opponents; // اسم اللاعب الحقيقي -> مستواه
+  final bool surrendered;
   MatchResult({
     required this.won,
     required this.kills,
@@ -52,6 +53,7 @@ class MatchResult {
     required this.bestStreak,
     required this.otherHumans,
     required this.opponents,
+    this.surrendered = false,
   });
 }
 
@@ -210,7 +212,7 @@ class Settings {
   bool vibration = true;
   double sensitivity = 1.0;
   bool batterySaver = false;
-  bool simpleDraw = true; // رسم مبسط (آمن على كل الهواتف)
+  bool simpleDraw = false; // رسم مبسط (للهواتف التي تظهر شاشة سوداء)
 
   Map<String, dynamic> toJson() => {
         'ea': eatAll,
@@ -232,7 +234,7 @@ class Settings {
     s.vibration = (j['vb'] ?? true) as bool;
     s.sensitivity = ((j['se'] ?? 1.0) as num).toDouble();
     s.batterySaver = (j['bs'] ?? false) as bool;
-    s.simpleDraw = (j['sd'] ?? true) as bool;
+    s.simpleDraw = (j['sd'] ?? false) as bool;
     return s;
   }
 }
@@ -336,7 +338,7 @@ class Store {
       rw.gained = r.otherHumans > 0 ? 2.0 : 1.0;
     } else {
       p.winStreak = 0;
-      rw.gained = 0.2; // تقدم صغير حتى مع الخسارة
+      rw.gained = r.surrendered ? 0.0 : 0.2; // تقدم صغير مع الخسارة، ولا شيء مع الاستسلام
     }
 
     r.opponents.forEach((name, level) {
